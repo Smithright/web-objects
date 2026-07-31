@@ -10,6 +10,18 @@
 // Bindings follow the conventions people already have in their hands: WASD and
 // the arrows, space to jump, shift to sprint, E to interact, mouse look under
 // pointer lock, and the W3C Standard Gamepad mapping for everything else.
+//
+// The sign convention, because getting it backwards is invisible in the code
+// and obvious the moment anybody touches a mouse:
+//
+//   forward = (sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch))
+//   right   = cross(worldUp, forward)
+//
+// so increasing yaw swings forward toward right, and increasing pitch swings
+// it upward. Mouse right is +movementX and mouse up is -movementY. Therefore
+// yaw takes movementX with a plus and pitch takes movementY with a minus.
+// test/input.test.js checks this against the camera the renderer actually
+// builds, rather than against this comment.
 
 export const DEFAULT_BINDINGS = {
   forward: ['KeyW', 'ArrowUp'],
@@ -107,7 +119,10 @@ export class InputController {
       // turn around in is not a world.
       if (!this.pointerLocked && !this.dragging) return;
       this.device = 'mouse';
-      this.state.yawDelta -= event.movementX * this.lookSpeed;
+      // Yaw increases to the camera's right — see the sign convention above —
+      // so moving the mouse right adds to it. Pitch increases upward, and
+      // movementY is negative upward, so that one subtracts.
+      this.state.yawDelta += event.movementX * this.lookSpeed;
       this.state.pitchDelta -= event.movementY * this.lookSpeed * (this.invertY ? -1 : 1);
     };
     this._onMouseDown = (event) => {
@@ -181,7 +196,7 @@ export class InputController {
       this.state.strafe += move.x;
     }
     if (look.magnitude > 0) {
-      this.state.yawDelta -= response(look.x) * this.padLookSpeed * dt;
+      this.state.yawDelta += response(look.x) * this.padLookSpeed * dt;
       this.state.pitchDelta -= response(look.y) * this.padLookSpeed * dt * (this.invertY ? -1 : 1);
     }
 

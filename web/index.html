@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Latticeborn Engine — an open, distributed reality engine for persistent worlds, simulations, games, agents, and interchangeable renderers." />
+  <meta name="theme-color" content="#08101d" />
+  <title>Latticeborn Engine — The World Is Not the Renderer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2308101d'/%3E%3Ctext x='16' y='23' font-size='20' text-anchor='middle' fill='%2358d6c9'%3E%E2%8C%98%3C/text%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="reading-progress" aria-hidden="true"><span id="readingProgress"></span></div>
+
+  <header class="site-header" id="top">
+    <a class="brand" href="#top" aria-label="Latticeborn Engine home">
+      <span class="brand-mark" aria-hidden="true">⌘</span>
+      <span>Latticeborn</span>
+    </a>
+    <nav class="top-nav" aria-label="Primary navigation">
+      <a href="#thesis">Thesis</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#runtime">Runtime</a>
+      <a href="#rendering">Rendering</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="demo.html">Live world →</a>
+    </nav>
+    <button id="themeToggle" class="icon-button" type="button" aria-label="Toggle color theme">◐</button>
+  </header>
+
+  <main>
+    <section class="hero section-shell">
+      <div class="hero-copy">
+        <p class="eyebrow">FOSS REALITY ENGINE · PUBLICATION DRAFT 0.1</p>
+        <h1>The world is not<br /><span>the renderer.</span></h1>
+        <p class="hero-lede">
+          Latticeborn is an open-source engine for persistent, distributed worlds. It stores reality as a temporal graph of identities, fields, relationships, laws, and events—then lets games, simulations, agents, browsers, VR systems, and scientific tools render their own views.
+        </p>
+        <div class="hero-actions">
+          <a class="button primary" href="demo.html">Run a live world</a>
+          <a class="button secondary" href="#architecture">Explore the architecture</a>
+          <button class="button secondary" id="copyManifesto" type="button">Copy manifesto</button>
+        </div>
+        <dl class="hero-facts">
+          <div><dt>License</dt><dd>Apache-2.0</dd></div>
+          <div><dt>Core</dt><dd>C17 + Rust</dd></div>
+          <div><dt>Renderers</dt><dd>O3DE · Godot · WebGPU</dd></div>
+          <div><dt>State</dt><dd>Graph + ECS + Event Log</dd></div>
+        </dl>
+      </div>
+
+      <div class="hero-visual" aria-label="Layered engine architecture diagram">
+        <div class="orb orb-a"></div>
+        <div class="orb orb-b"></div>
+        <div class="architecture-card glass">
+          <div class="layer clients"><span>Views</span><b>Desktop · Web · VR · AI</b></div>
+          <div class="flow">↕</div>
+          <div class="layer projection"><span>Projection</span><b>Interest · LOD · Prediction</b></div>
+          <div class="flow">↕</div>
+          <div class="layer runtime"><span>Runtime</span><b>Systems · Solvers · Schedulers</b></div>
+          <div class="flow">↕</div>
+          <div class="layer substrate"><span>Substrate</span><b>Entities · Fields · Graph · Time</b></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="thesis" class="section-shell prose-section">
+      <div class="section-number">01</div>
+      <div>
+        <p class="eyebrow">THE CENTRAL THESIS</p>
+        <h2>Do not render the universe. Evolve it.</h2>
+        <p class="lead">
+          Traditional game engines usually make the scene, object hierarchy, or level file the center of reality. Latticeborn reverses that assumption. The canonical world exists independently from any visual client. Renderers receive filtered projections of state; they do not own truth.
+        </p>
+        <div class="principle-grid">
+          <article><h3>Identity without weight</h3><p>An entity is a durable identifier. Components, graph edges, and field participation give it meaning.</p></article>
+          <article><h3>Objects above, streams below</h3><p>Humans author objects and behaviors. The machine executes dense transformations over contiguous data.</p></article>
+          <article><h3>Time is structural</h3><p>Every change is ordered, attributable, replayable, branchable, and inspectable.</p></article>
+          <article><h3>Resolution is fluid</h3><p>The same world may be represented statistically, agentically, physically, or visually at once.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="architecture" class="section-shell prose-section alternate">
+      <div class="section-number">02</div>
+      <div>
+        <p class="eyebrow">SYSTEM ARCHITECTURE</p>
+        <h2>A reality stack, not a monolith.</h2>
+        <div class="stack-diagram" role="img" aria-label="Latticeborn system stack">
+          <div><strong>Experience Layer</strong><span>O3DE · Godot · WebGPU · XR · CLI · Agents</span></div>
+          <div><strong>Projection Layer</strong><span>Replication · Interest Management · LOD · Prediction · Asset Resolution</span></div>
+          <div><strong>Simulation Layer</strong><span>ECS Systems · Physics · AI · Field Solvers · Procedural Generation</span></div>
+          <div><strong>World Layer</strong><span>Entity Identity · Semantic Graph · Spatial Index · Temporal State</span></div>
+          <div><strong>Durability Layer</strong><span>Event Log · Checkpoints · PostgreSQL · Object Storage</span></div>
+          <div><strong>Fabric Layer</strong><span>NATS Core · JetStream · QUIC · Shared Memory · GPU Compute</span></div>
+        </div>
+
+        <h3>The canonical world record</h3>
+        <p>A world version is the result of applying commands and physical laws to a prior version. The engine treats causality as data.</p>
+        <pre><code><span class="kw">World</span>[t] + <span class="kw">Commands</span>[t] + <span class="kw">Laws</span>[v] → <span class="kw">World</span>[t+1]
+
+Event {
+  universe_id,
+  tick,
+  event_id,
+  causal_parent,
+  actor,
+  target,
+  operation,
+  payload,
+  schema_version
+}</code></pre>
+      </div>
+    </section>
+
+    <section id="model" class="section-shell prose-section">
+      <div class="section-number">03</div>
+      <div>
+        <p class="eyebrow">WORLD MODEL</p>
+        <h2>Entities are identities. Components are facts. Graphs are meaning.</h2>
+        <div class="two-column">
+          <div>
+            <h3>Entity identity</h3>
+            <pre><code><span class="kw">typedef struct</span> {
+  uint64_t universe;
+  uint64_t entity;
+} EntityId;</code></pre>
+            <p>Identity remains stable even as every component changes, the entity migrates between shards, or its visual representation disappears.</p>
+          </div>
+          <div>
+            <h3>Component storage</h3>
+            <pre><code>Position:    [P0][P1][P2][P3]...
+Velocity:    [V0][V1][V2][V3]...
+Temperature: [T0][T1][T2][T3]...</code></pre>
+            <p>Archetype tables and structure-of-arrays layouts convert object behavior into cache-friendly streams.</p>
+          </div>
+        </div>
+
+        <div class="callout">
+          <span class="callout-label">Reconciliation</span>
+          <p><strong>Your experience can remain object-oriented.</strong> The object is a semantic handle over a data-oriented substrate. Authoring ergonomics and machine execution do not need the same shape.</p>
+        </div>
+
+        <h3>Four simultaneous representations</h3>
+        <div class="capability-table" role="table" aria-label="World representations">
+          <div class="table-head" role="row"><span>Representation</span><span>Purpose</span><span>Example</span></div>
+          <div role="row"><b>Entity–component</b><span>Fast mutable simulation</span><code>Position, Mass, Health</code></div>
+          <div role="row"><b>Semantic graph</b><span>Meaning and relationships</span><code>Alice OWNS Ship-7</code></div>
+          <div role="row"><b>Continuous fields</b><span>Distributed physical quantities</span><code>temperature(x,y,z,t)</code></div>
+          <div role="row"><b>Event history</b><span>Causality and replay</span><code>transferOwnership()</code></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="runtime" class="section-shell prose-section alternate">
+      <div class="section-number">04</div>
+      <div>
+        <p class="eyebrow">SIMULATION RUNTIME</p>
+        <h2>The engine schedules transformations, not object chatter.</h2>
+        <p class="lead">Every system declares what it reads, writes, where it operates, how often it runs, and which execution backend it can use.</p>
+        <pre><code><span class="kw">SYSTEM</span>(Gravity) {
+  .reads   = { Position, Mass },
+  .writes  = { Force },
+  .domain  = SPATIAL,
+  .rate_hz = 60,
+  .backend = CPU_SIMD | GPU_COMPUTE,
+  .mode    = DETERMINISTIC
+};</code></pre>
+
+        <div class="pipeline" aria-label="Simulation pipeline">
+          <span>Input</span><i>→</i><span>Intent</span><i>→</i><span>Navigation</span><i>→</i><span>Forces</span><i>→</i><span>Physics</span><i>→</i><span>Consequences</span><i>→</i><span>Commit</span>
+        </div>
+
+        <h3>Scheduler contract</h3>
+        <ul class="check-list">
+          <li>Build a dependency DAG from declared read/write hazards.</li>
+          <li>Batch entities by archetype, spatial cell, and execution affinity.</li>
+          <li>Run independent systems concurrently.</li>
+          <li>Fuse compatible passes to reduce memory traffic.</li>
+          <li>Route stable hot kernels to SIMD, GPU compute, FPGA, or ASIC implementations.</li>
+          <li>Preserve a deterministic mode for rollback, replay, tests, and consensus.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="time" class="section-shell prose-section">
+      <div class="section-number">05</div>
+      <div>
+        <p class="eyebrow">TIME, CAUSALITY & BRANCHING</p>
+        <h2>History is executable.</h2>
+        <div class="timeline">
+          <div><span>T₀</span><p>Checkpoint</p></div>
+          <div><span>T₁</span><p>Commands</p></div>
+          <div><span>T₂</span><p>Physics</p></div>
+          <div><span>T₃</span><p>Consequences</p></div>
+          <div class="branch"><span>T₂′</span><p>Counterfactual branch</p></div>
+        </div>
+        <p>Latticeborn supports fixed simulation ticks, continuous solver time, and irregular event time. A universe branch references a parent universe and a fork tick. It does not duplicate all prior state.</p>
+        <div class="three-column">
+          <article><h3>Replay</h3><p>Reconstruct state from checkpoints plus ordered events.</p></article>
+          <article><h3>Rollback</h3><p>Correct late input, resimulate, and reconcile clients.</p></article>
+          <article><h3>Counterfactuals</h3><p>Fork reality to evaluate policy, strategy, agents, or narrative outcomes.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="spatial" class="section-shell prose-section alternate">
+      <div class="section-number">06</div>
+      <div>
+        <p class="eyebrow">SPACE & MULTI-RESOLUTION REALITY</p>
+        <h2>Simulate what matters, at the fidelity it deserves.</h2>
+        <div class="lod-ladder">
+          <div><b>L0</b><span>Aggregate</span><p>Population, flows, distributions.</p></div>
+          <div><b>L1</b><span>Coarse agents</span><p>Simplified entities and rules.</p></div>
+          <div><b>L2</b><span>Interactive</span><p>Normal game-grade simulation.</p></div>
+          <div><b>L3</b><span>Detailed</span><p>Fluids, fracture, organisms.</p></div>
+          <div><b>L4</b><span>Scientific</span><p>High-resolution local solver.</p></div>
+        </div>
+        <p>A distant city can remain a statistical system. As an observer approaches, the engine materializes districts, streets, vehicles, and people constrained by that aggregate state. Detail is generated, but continuity is conserved.</p>
+        <h3>Spatial services</h3>
+        <div class="tag-cloud">
+          <span>Hierarchical grids</span><span>BVH</span><span>Loose octrees</span><span>Spatial hashing</span><span>Navmeshes</span><span>Portals</span><span>Sparse voxels</span><span>Signed-distance fields</span><span>Geospatial coordinates</span><span>Origin rebasing</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="physics" class="section-shell prose-section">
+      <div class="section-number">07</div>
+      <div>
+        <p class="eyebrow">PHYSICS & FIELDS</p>
+        <h2>No single solver deserves sovereignty.</h2>
+        <p class="lead">A reality engine must choose mathematics by regime rather than force all phenomena into one abstraction.</p>
+        <div class="solver-grid">
+          <article><h3>Rigid bodies</h3><p>Broad phase, narrow phase, constraints, sleeping, continuous collision detection.</p><small>Reference integration: Jolt Physics</small></article>
+          <article><h3>Fluids</h3><p>SPH for local interaction, grid solvers for bounded fidelity, shallow-water models for regional flow.</p></article>
+          <article><h3>Soft matter</h3><p>Position-based and extended position-based dynamics for cloth, ropes, tissue, and deformables.</p></article>
+          <article><h3>Destruction</h3><p>Fracture graphs, sparse voxels, SDFs, structural constraints, and procedural remeshing.</p></article>
+          <article><h3>Climate</h3><p>Multi-scale advection, diffusion, radiation, hydrology, and statistical downscaling.</p></article>
+          <article><h3>Biology</h3><p>Metabolic fields, ecological networks, morphogenesis, populations, and agent-level organisms.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="procedural" class="section-shell prose-section alternate">
+      <div class="section-number">08</div>
+      <div>
+        <p class="eyebrow">PROCEDURAL GENESIS</p>
+        <h2>Store causes. Regenerate consequences.</h2>
+        <div class="genesis-chain">
+          <span>Seed</span><i>→</i><span>Cosmology</span><i>→</i><span>Geology</span><i>→</i><span>Climate</span><i>→</i><span>Ecology</span><i>→</i><span>Civilization</span><i>→</i><span>History</span><i>→</i><span>Now</span>
+        </div>
+        <p>Procedural systems are versioned transformations. Immutable causes—seed, generator version, chunk coordinate, and parameters—reconstruct default reality. Persistence records only consequential divergence.</p>
+        <pre><code>chunk = generate(
+  world_seed,
+  generator_version,
+  chunk_coordinate,
+  geological_context,
+  climate_context
+)
+
+final_chunk = apply_mutation_log(chunk, local_events)</code></pre>
+      </div>
+    </section>
+
+    <section id="network" class="section-shell prose-section">
+      <div class="section-number">09</div>
+      <div>
+        <p class="eyebrow">NETWORKING & DISTRIBUTION</p>
+        <h2>Move meaning, not pixels.</h2>
+        <div class="two-column">
+          <div>
+            <h3>Control and durable events</h3>
+            <p><strong>NATS Core</strong> carries ephemeral command, request/reply, service discovery, and low-latency state signals. <strong>JetStream</strong> carries durable work, consequential events, and replayable streams.</p>
+          </div>
+          <div>
+            <h3>Dense real-time replication</h3>
+            <p>QUIC or engine-native datagrams carry snapshots, compressed component deltas, prediction corrections, and asset references. Shared memory is used within a host.</p>
+          </div>
+        </div>
+        <div class="callout warning">
+          <span class="callout-label">Hard boundary</span>
+          <p>NATS is not a draw-call bus. Vertices, textures, framebuffers, and per-frame GPU command streams stay local to the renderer.</p>
+        </div>
+
+        <h3>Interest management</h3>
+        <p>A client subscribes to a changing semantic and spatial horizon: nearby entities, visible cells, audible events, owned assets, mission state, social context, and predicted future relevance.</p>
+        <ol class="priority-list">
+          <li><b>P0</b><span>Immediate player state, collisions, ownership, authority.</span></li>
+          <li><b>P1</b><span>Nearby dynamic entities and combat-critical events.</span></li>
+          <li><b>P2</b><span>Animation, sound, particles, and secondary motion.</span></li>
+          <li><b>P3</b><span>Distant or slowly changing objects.</span></li>
+          <li><b>P4</b><span>Cosmetic, procedural, or reconstructible detail.</span></li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="persistence" class="section-shell prose-section alternate">
+      <div class="section-number">10</div>
+      <div>
+        <p class="eyebrow">PERSISTENCE</p>
+        <h2>Memory is hot. History is durable. Meaning is queryable.</h2>
+        <div class="storage-grid">
+          <article><b>Hot world state</b><p>In-memory ECS tables, spatial indices, field tiles, and solver buffers.</p></article>
+          <article><b>Relational truth</b><p>PostgreSQL for identities, permissions, ownership, transactions, inventories, and configuration.</p></article>
+          <article><b>Semantic graph</b><p>Apache AGE or a replaceable graph layer for relationships, provenance, plans, and world knowledge.</p></article>
+          <article><b>Immutable history</b><p>Append-only event segments and checkpoints in content-addressed object storage.</p></article>
+        </div>
+        <p>The database must not participate in every physics tick. Simulation commits checkpoints and significant events asynchronously, while authoritative tick state remains memory-resident.</p>
+      </div>
+    </section>
+
+    <section id="rendering" class="section-shell prose-section">
+      <div class="section-number">11</div>
+      <div>
+        <p class="eyebrow">RENDERING</p>
+        <h2>One world. Many senses.</h2>
+        <p class="lead">Each renderer maintains a local projection ECS. It resolves assets, reconstructs procedural detail, interpolates snapshots, predicts motion, and builds a render graph appropriate to its hardware and aesthetic.</p>
+        <div class="renderer-tabs" role="tablist" aria-label="Renderer clients">
+          <button class="renderer-tab active" data-panel="o3de" role="tab">O3DE</button>
+          <button class="renderer-tab" data-panel="godot" role="tab">Godot</button>
+          <button class="renderer-tab" data-panel="webgpu" role="tab">WebGPU</button>
+          <button class="renderer-tab" data-panel="semantic" role="tab">AI / Semantic</button>
+        </div>
+        <div class="renderer-panels">
+          <article id="panel-o3de" class="renderer-panel active"><h3>High-fidelity desktop and XR</h3><p>Atom render pipelines, physically based materials, Vulkan/DirectX/Metal backends, large assets, high-end lighting, and deep native customization.</p></article>
+          <article id="panel-godot" class="renderer-panel"><h3>Lightweight and expressive</h3><p>Fast iteration, approachable scene authoring, compact deployments, stylized rendering, mobile targets, and direct RenderingServer access where needed.</p></article>
+          <article id="panel-webgpu" class="renderer-panel"><h3>Ubiquitous access</h3><p>WebAssembly simulation projections, WebGPU rendering, glTF assets, browser-native collaboration, and progressive fidelity.</p></article>
+          <article id="panel-semantic" class="renderer-panel"><h3>Worlds without pixels</h3><p>An agent can “render” the same universe as entities, affordances, relationships, beliefs, hazards, causal history, and possible actions.</p></article>
+        </div>
+
+        <h3>Typical visual pipeline</h3>
+        <div class="render-pipeline">
+          <span>Projection</span><span>Culling</span><span>LOD</span><span>Animation</span><span>Geometry</span><span>Lighting</span><span>Transparency</span><span>Volumetrics</span><span>Post</span><span>UI</span>
+        </div>
+        <p>Rasterization remains the primary real-time path. Ray tracing augments shadows, reflections, global illumination, or complete path-traced modes. Procedural geometry may be generated on the server, CPU client, or GPU depending on whether it changes truth or only appearance.</p>
+      </div>
+    </section>
+
+    <section id="agents" class="section-shell prose-section alternate">
+      <div class="section-number">12</div>
+      <div>
+        <p class="eyebrow">AGENTS & SCRIPTING</p>
+        <h2>Behavior is capability-secured computation.</h2>
+        <p>World laws, user scripts, mods, and agent skills run as sandboxed WebAssembly components. The runtime grants explicit, revocable capabilities rather than ambient authority.</p>
+        <pre><code>capabilities {
+  read:  nearby.transforms, local.weather, self.inventory
+  write: self.intent, self.memory
+  emit:  speech, movement_request, trade_offer
+  deny:  filesystem, raw_network, arbitrary_database
+  budget: { cpu_ms: 2, memory_mb: 32, events: 64 }
+}</code></pre>
+        <div class="three-column">
+          <article><h3>Deterministic law</h3><p>Versioned rules participate directly in authoritative simulation.</p></article>
+          <article><h3>Bounded agency</h3><p>Agents perceive filtered worlds and act through validated intents.</p></article>
+          <article><h3>Hot evolution</h3><p>Components can be upgraded, rolled back, tested, and migrated independently.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="security" class="section-shell prose-section">
+      <div class="section-number">13</div>
+      <div>
+        <p class="eyebrow">SECURITY, TRUST & GOVERNANCE</p>
+        <h2>Authority is explicit, local, and auditable.</h2>
+        <ul class="check-list">
+          <li>Capability-based access for scripts, services, agents, and administrators.</li>
+          <li>Signed commands and provenance-aware events for high-value transitions.</li>
+          <li>Server authority over canonical outcomes; clients submit intents.</li>
+          <li>Schema validation, resource metering, rate limits, and deterministic validation.</li>
+          <li>Namespace isolation for universes, tenants, mods, and experimental branches.</li>
+          <li>Reproducible builds, software bills of materials, and signed release artifacts.</li>
+          <li>Privacy boundaries separating public world facts from private agent memory.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="tooling" class="section-shell prose-section alternate">
+      <div class="section-number">14</div>
+      <div>
+        <p class="eyebrow">CREATOR TOOLING</p>
+        <h2>The editor is another client.</h2>
+        <p>The editor connects to the same world APIs as every other observer. It can pause, branch, inspect, query, mutate, replay, diff, profile, and visualize causality without becoming the owner of state.</p>
+        <div class="tool-grid">
+          <article><span>01</span><h3>World inspector</h3><p>Browse entities, fields, graph edges, provenance, and historical values.</p></article>
+          <article><span>02</span><h3>Temporal debugger</h3><p>Scrub time, compare branches, trace causal ancestry, and replay divergent inputs.</p></article>
+          <article><span>03</span><h3>System profiler</h3><p>Measure cache misses, memory bandwidth, stalls, scheduling, network cost, and solver error.</p></article>
+          <article><span>04</span><h3>Law workbench</h3><p>Author, test, version, fuzz, and deploy rules or WebAssembly components.</p></article>
+          <article><span>05</span><h3>Procedural studio</h3><p>Compose generators as graphs with seeded previews and deterministic diffs.</p></article>
+          <article><span>06</span><h3>Projection editor</h3><p>Map canonical components to render assets, materials, animations, sound, and UI.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="performance" class="section-shell prose-section">
+      <div class="section-number">15</div>
+      <div>
+        <p class="eyebrow">MACHINE SYMPATHY</p>
+        <h2>Optimize data motion before arithmetic.</h2>
+        <blockquote>Most performance failures are not failures to compute. They are failures to place, batch, predict, or reuse data.</blockquote>
+        <div class="performance-grid">
+          <article><h3>Memory locality</h3><p>Contiguous tables, hot/cold splitting, compact component schemas, arenas, and cache-aware tiling.</p></article>
+          <article><h3>Batching</h3><p>Transform many similar values per pass; avoid virtual dispatch and pointer-chasing in hot loops.</p></article>
+          <article><h3>Specialization</h3><p>Profile stable high-load kernels, then graduate them from scalar CPU to SIMD, GPU, FPGA, or ASIC.</p></article>
+          <article><h3>Approximation</h3><p>Spend fidelity only where error becomes perceptible or causally important.</p></article>
+        </div>
+        <div class="metrics">
+          <div><b>60 Hz</b><span>interactive authoritative target</span></div>
+          <div><b>10⁵</b><span>locally visible lightweight entities</span></div>
+          <div><b>10⁶+</b><span>active entities per regional shard</span></div>
+          <div><b>billions</b><span>durable semantic identities, partitioned</span></div>
+        </div>
+        <p class="fine-print">These are design targets, not promises. Actual capacity depends on component density, solver complexity, update frequency, hardware, and consistency requirements.</p>
+      </div>
+    </section>
+
+    <section id="stack" class="section-shell prose-section alternate">
+      <div class="section-number">16</div>
+      <div>
+        <p class="eyebrow">REFERENCE FOSS STACK</p>
+        <h2>Replaceable by design.</h2>
+        <div class="capability-table stack-table" role="table" aria-label="Reference open-source stack">
+          <div class="table-head" role="row"><span>Capability</span><span>Reference choice</span><span>Role</span></div>
+          <div role="row"><b>Core ABI</b><span>C17</span><span>Stable data contracts and hot kernels</span></div>
+          <div role="row"><b>Services</b><span>Rust</span><span>Safe distributed systems and tooling</span></div>
+          <div role="row"><b>ECS</b><span>Flecs / custom archetypes</span><span>Dense simulation storage</span></div>
+          <div role="row"><b>Physics</b><span>Jolt Physics</span><span>Rigid-body reference backend</span></div>
+          <div role="row"><b>Messaging</b><span>NATS + JetStream</span><span>Service fabric and durable event flow</span></div>
+          <div role="row"><b>Database</b><span>PostgreSQL + Apache AGE</span><span>Transactions and semantic graph</span></div>
+          <div role="row"><b>Sandbox</b><span>Wasmtime</span><span>Portable capability-bound behavior</span></div>
+          <div role="row"><b>Desktop renderer</b><span>O3DE Atom</span><span>High-fidelity visualization</span></div>
+          <div role="row"><b>Light renderer</b><span>Godot</span><span>Mobile, tools, stylized worlds</span></div>
+          <div role="row"><b>Web renderer</b><span>WebGPU + WebAssembly</span><span>Universal browser access</span></div>
+          <div role="row"><b>Scene interchange</b><span>OpenUSD + glTF</span><span>Layered authored assets and delivery</span></div>
+          <div role="row"><b>Observability</b><span>OpenTelemetry · Prometheus · Grafana</span><span>Tracing, metrics, and operations</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="roadmap" class="section-shell prose-section">
+      <div class="section-number">17</div>
+      <div>
+        <p class="eyebrow">IMPLEMENTATION ROADMAP</p>
+        <h2>Build the spine before the skin.</h2>
+        <div class="roadmap">
+          <article><span>Phase 0</span><h3>Contracts</h3><p>Entity IDs, schema registry, component ABI, event envelope, deterministic tick harness.</p></article>
+          <article><span>Phase 1</span><h3>Single-node world</h3><p>Archetype ECS, scheduler, spatial cells, Jolt integration, checkpoints, replay.</p></article>
+          <article><span>Phase 2</span><h3>First projection</h3><p>Godot or WebGPU client, snapshot protocol, interpolation, procedural chunk reconstruction.</p></article>
+          <article><span>Phase 3</span><h3>Distributed regions</h3><p>NATS fabric, region ownership, migration, interest management, durable event partitions.</p></article>
+          <article><span>Phase 4</span><h3>Temporal intelligence</h3><p>Branching universes, causal queries, agent perception, Wasm laws, counterfactual simulation.</p></article>
+          <article><span>Phase 5</span><h3>High-fidelity reality</h3><p>O3DE client, multi-resolution fields, advanced procedural systems, GPU solver backends.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="implementation" class="section-shell prose-section alternate">
+      <div class="section-number">18</div>
+      <div>
+        <p class="eyebrow">REFERENCE IMPLEMENTATION</p>
+        <h2>The spine exists. Go run it.</h2>
+        <p class="lead">
+          Phase 0 and Phase 1 of the roadmap are implemented in this repository as a dependency-free reference core: a
+          schema registry and component ABI, archetype ECS over typed-array columns, a hazard-derived scheduler, a
+          sealed event log, continuous fields, a semantic graph, capability-sandboxed laws, procedural genesis, and a
+          projection layer with interest management and priority tiers.
+        </p>
+        <div class="three-column">
+          <article><h3>Live world</h3><p>A browser client that renders the same universe as pixels, as text, and as an agent's affordances — <a href="demo.html">open the demo</a>.</p></article>
+          <article><h3>Terminal client</h3><p><code>latticeborn demo</code> renders the world as ASCII; <code>latticeborn inspect</code> renders one entity with no pixels at all.</p></article>
+          <article><h3>Proofs, not claims</h3><p><code>latticeborn verify</code> demonstrates determinism, replay, rollback, branching, log integrity, and sandbox containment.</p></article>
+        </div>
+        <pre><code>npm test                  <span class="kw"># 48 checks across the substrate and runtime</span>
+node bin/latticeborn.js verify
+node bin/latticeborn.js demo
+npm run serve             <span class="kw"># publication + live world at localhost:8080</span></code></pre>
+        <div class="callout">
+          <span class="callout-label">Scope</span>
+          <p><strong>This is the spine, not the skin.</strong> The reference core is JavaScript so it can run unmodified
+          in a terminal and a browser. The C17 ABI, Rust services, Jolt integration, NATS fabric, and the O3DE, Godot,
+          and WebGPU clients described above remain Phase 2 and beyond.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="manifesto" class="manifesto section-shell">
+      <p class="eyebrow">THE LATTICEBORN MANIFESTO</p>
+      <h2>Reality is state in motion.</h2>
+      <p id="manifestoText">We will not confuse a scene graph for a world, a frame for a moment, or a renderer for reality. We will model identity separately from representation, meaning separately from storage, and law separately from appearance. We will let objects emerge over fields, let history remain executable, and let every observer receive the world it can perceive. We will optimize movement of data before multiplication of instructions. We will specialize what is stable, approximate what is distant, and preserve what is causally important. The engine will not own the universe. It will serve it.</p>
+    </section>
+  </main>
+
+  <footer class="site-footer section-shell">
+    <div>
+      <a class="brand" href="#top"><span class="brand-mark">⌘</span><span>Latticeborn Engine</span></a>
+      <p>An open architecture for persistent worlds, simulations, games, and machine societies.</p>
+    </div>
+    <div class="footer-meta">
+      <span>Publication draft 0.1</span>
+      <span>Proposed license: Apache-2.0</span>
+      <span>Architecture before implementation</span>
+    </div>
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite">Copied.</div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="A live Latticeborn world: one authoritative simulation, three renderers, deterministic replay, and counterfactual branching — running in your browser." />
+  <meta name="theme-color" content="#08101d" />
+  <title>Latticeborn — Live World</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2308101d'/%3E%3Ctext x='16' y='23' font-size='20' text-anchor='middle' fill='%2358d6c9'%3E%E2%8C%98%3C/text%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="demo.css" />
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="index.html" aria-label="Latticeborn Engine home">
+      <span class="brand-mark" aria-hidden="true">⌘</span>
+      <span>Latticeborn</span>
+    </a>
+    <nav class="top-nav" aria-label="Primary navigation">
+      <a href="index.html">Publication</a>
+      <a href="demo.html" class="active">Live world</a>
+    </nav>
+    <button id="themeToggle" class="icon-button" type="button" aria-label="Toggle color theme">◐</button>
+  </header>
+
+  <main class="demo-shell">
+    <section class="stage">
+      <div class="stage-head">
+        <div>
+          <p class="eyebrow" style="margin:0">THE GROVE · AUTHORITATIVE WORLD</p>
+          <h1 class="stage-title">One world. Many senses.</h1>
+        </div>
+        <dl class="stage-facts">
+          <div><dt>universe</dt><dd id="statUniverse">u0</dd></div>
+          <div><dt>tick</dt><dd id="statTick">0</dd></div>
+          <div><dt>state hash</dt><dd id="statHash">—</dd></div>
+        </dl>
+      </div>
+
+      <div class="canvas-wrap">
+        <canvas id="world" width="760" height="760" aria-label="Live simulation view"></canvas>
+        <p class="canvas-hint">
+          move to steer the observer · <b>click</b> ignite · <b>shift-click</b> shove · <b>alt-click</b> seed a forager
+        </p>
+      </div>
+
+      <div class="controls">
+        <button class="button primary" id="btnPlay" type="button">Pause</button>
+        <button class="button secondary" id="btnStep" type="button">Step</button>
+        <label class="slider">speed
+          <input id="speed" type="range" min="1" max="8" value="3" />
+          <span id="speedOut">3×</span>
+        </label>
+        <button class="button secondary" id="btnCheckpoint" type="button">Checkpoint</button>
+        <button class="button secondary" id="btnFork" type="button">Fork counterfactual</button>
+        <button class="button secondary" id="btnReset" type="button">New seed</button>
+      </div>
+
+      <div class="rail-block">
+        <div class="rail-head">
+          <span class="panel-label">Durability — checkpoints</span>
+          <span class="rail-note" id="railNote">click any checkpoint to rewind the world to it</span>
+        </div>
+        <div class="rail" id="rail"></div>
+      </div>
+
+      <section class="branch-block" id="branchBlock" hidden>
+        <div class="rail-head">
+          <span class="panel-label">Counterfactual — <span id="branchName">u1</span></span>
+          <button class="link-button" id="btnCloseBranch" type="button">collapse</button>
+        </div>
+        <div class="branch-body">
+          <canvas id="branch" width="360" height="360" aria-label="Counterfactual branch view"></canvas>
+          <div class="branch-readout">
+            <p>Forked from u0 at tick <b id="branchFork">—</b>. Same laws, same schedule, one different decision: the
+            centre was culled and the far corner set alight. Neither universe can affect the other.</p>
+            <dl class="kv" id="branchStats"></dl>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <aside class="panels">
+      <section class="panel">
+        <h2 class="panel-label">World</h2>
+        <dl class="kv" id="worldStats"></dl>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel-label">Schedule the engine derived</h2>
+        <p class="panel-note">Systems declare reads and writes. Waves, order, and concurrency are inferred from the hazards.</p>
+        <div id="schedule" class="waves"></div>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel-label">Projection — what the observer receives</h2>
+        <p class="panel-note">The dashed circle is one client's interest horizon. Only meaning crosses it.</p>
+        <div class="bandwidth"><span id="bandwidthFill"></span></div>
+        <dl class="kv" id="projectionStats"></dl>
+        <div class="priority-bars" id="priorityBars"></div>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel-label">Capability sandbox</h2>
+        <p class="panel-note">Agent behavior runs against a view built from its grant. Rogues reach past it and lose their turn.</p>
+        <div id="lawStats"></div>
+        <p class="fault" id="lastFault"></p>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel-label">Same world, rendered without pixels</h2>
+        <pre class="semantic" id="semantic">—</pre>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel-label">Event log</h2>
+        <p class="panel-note">Append-only, causally linked, sealed. This is the history a replay executes.</p>
+        <div class="log" id="log"></div>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="site-footer">
+    <div>
+      <a class="brand" href="index.html"><span class="brand-mark">⌘</span><span>Latticeborn Engine</span></a>
+      <p>Every number on this page is produced by the engine running in this tab — one authoritative world, projected three ways.</p>
+    </div>
+    <div class="footer-meta">
+      <span>Apache-2.0</span>
+      <span>Deterministic · replayable · branchable</span>
+      <span><a href="index.html">Read the architecture →</a></span>
+    </div>
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite">Copied.</div>
+  <script type="module" src="demo.js"></script>
+</body>
+</html>

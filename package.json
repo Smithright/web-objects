@@ -1,0 +1,31 @@
+{
+  "name": "latticeborn",
+  "version": "0.1.0",
+  "description": "An open reality engine: entities, fields, semantic graph, event history, and interchangeable renderers.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "bin": {
+    "latticeborn": "./bin/latticeborn.js"
+  },
+  "files": [
+    "src",
+    "bin",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "demo": "node bin/latticeborn.js demo",
+    "verify": "node bin/latticeborn.js verify",
+    "bench": "node bin/latticeborn.js bench",
+    "chunk": "node bin/latticeborn.js chunk",
+    "test": "node --test \"test/*.test.js\"",
+    "serve": "node tools/serve.js",
+    "bundle": "node tools/bundle.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

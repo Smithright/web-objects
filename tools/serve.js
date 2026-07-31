@@ -22,6 +22,9 @@ const TYPES = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
+  '.vrm': 'model/gltf-binary',
+  '.glb': 'model/gltf-binary',
+  '.gltf': 'model/gltf+json',
 };
 
 const server = http.createServer(async (req, res) => {
@@ -35,7 +38,7 @@ const server = http.createServer(async (req, res) => {
   // The web clients live in web/ but address each other from the site root, so
   // that is where they are mounted. Everything else resolves from the repo root
   // — which is how demo.js imports the engine straight out of src/.
-  if (!path.startsWith('/src/') && !path.startsWith('/tools/') && !path.startsWith('/test/')) {
+  if (!path.startsWith('/src/') && !path.startsWith('/tools/') && !path.startsWith('/test/') && !path.startsWith('/assets/')) {
     path = `/web${path}`;
   }
 

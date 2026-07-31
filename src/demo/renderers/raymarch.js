@@ -25,6 +25,9 @@
 // uniforms, or the camera changing at all.
 
 import { EYE_HEIGHT, SPECIES } from '../pandora.js';
+import { cameraMatrices, createMeshPass } from './mesh.js';
+import { transformMatrix } from '../../core/scene.js';
+import { handleIndex } from '../../core/ids.js';
 import { SEA_LEVEL, TERRAIN_GLSL } from '../../core/terrain.js';
 
 export const MAX_LIGHTS = 48;
@@ -90,6 +93,7 @@ uniform int uIslands;
 uniform int uClouds;
 uniform int uGodRays;
 uniform float uFar;
+uniform float uNear;
 
 uniform int uLightCount;
 uniform vec4 uLightPos[${MAX_LIGHTS}];
@@ -565,7 +569,8 @@ vec3 shadeWater(vec3 p, vec3 rd) {
   return color + lightHaze(p, -rd, 24.0) * 0.4;
 }
 
-vec3 shadeScene(vec3 ro, vec3 rd, float dither) {
+vec3 shadeScene(vec3 ro, vec3 rd, float dither, out float hitDistance) {
+  hitDistance = uFar;
   float tTerrain;
   bool hitTerrain = marchTerrain(ro, rd, 0.05, uFar, uSteps, tTerrain);
   float tBound = hitTerrain ? tTerrain : uFar;
@@ -662,6 +667,7 @@ vec3 shadeScene(vec3 ro, vec3 rd, float dither) {
     return color + lightHaze(ro, rd, uFar) + godRays(ro, rd, uFar, dither);
   }
 
+  hitDistance = dist;
   color = applyFog(color, dist, rd, hitPoint);
   return color + lightHaze(ro, rd, dist) + godRays(ro, rd, dist, dither);
 }
@@ -671,7 +677,15 @@ void main() {
   vec3 rd = normalize(uCamBasis * vec3(uv * uFov, 1.0));
   vec2 fc = mod(gl_FragCoord.xy, 2048.0);
   float dither = hashUnit2(int(fc.x), int(fc.y), uSeed + int(uTime * 60.0));
-  fragColor = vec4(shadeScene(uCamPos, rd, dither), 1.0);
+  float hitDistance;
+  fragColor = vec4(shadeScene(uCamPos, rd, dither, hitDistance), 1.0);
+
+  // Publish depth so the mesh pass can depth-test against procedural surfaces.
+  // Distance along the ray becomes view-space Z, then the same non-linear
+  // mapping the rasterizer's projection matrix produces.
+  float viewZ = max(uNear, hitDistance * dot(rd, normalize(uCamBasis[2])));
+  float ndc = (uFar + uNear) / (uFar - uNear) - (2.0 * uFar * uNear) / ((uFar - uNear) * viewZ);
+  gl_FragDepth = clamp(ndc * 0.5 + 0.5, 0.0, 1.0);
 }`;
 
 const BRIGHT_SHADER = `#version 300 es
@@ -806,7 +820,7 @@ export function createRaymarchRenderer(canvas, options = {}) {
 
   const scene = link(gl, SCENE_SHADER, [
     'uResolution', 'uTime', 'uSeed', 'uCamPos', 'uCamBasis', 'uFov',
-    'uSteps', 'uShadowSteps', 'uReflection', 'uAO', 'uIslands', 'uClouds', 'uGodRays', 'uFar',
+    'uSteps', 'uShadowSteps', 'uReflection', 'uAO', 'uIslands', 'uClouds', 'uGodRays', 'uFar', 'uNear',
     'uLightCount', 'uLightPos', 'uLightColor', 'uMarkCount', 'uMarks',
     'uAvatarPos', 'uAvatarYaw', 'uAvatarPhase', 'uAvatarSpeed', 'uAvatarVisible',
     'uAppearance', 'uAppearance2',
@@ -831,8 +845,11 @@ export function createRaymarchRenderer(canvas, options = {}) {
   const state = { width: 0, height: 0, frames: 0, lastMs: 0, avgMs: 16 };
 
   const targets = { scene: null, bloomA: null, bloomB: null };
+  let sceneDepth = null;
+  const meshPass = createMeshPass(gl);
+  const NEAR = 0.05;
 
-  function makeTarget(width, height) {
+  function makeTarget(width, height, depth = false) {
     const texture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, width, height, 0, gl.RGBA, textureType, null);
@@ -844,8 +861,15 @@ export function createRaymarchRenderer(canvas, options = {}) {
     const framebuffer = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+    if (depth) {
+      const buffer = gl.createRenderbuffer();
+      gl.bindRenderbuffer(gl.RENDERBUFFER, buffer);
+      gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, width, height);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, buffer);
+      sceneDepth = buffer;
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    return { texture, framebuffer, width, height };
+    return { texture, framebuffer, width, height, depth: depth ? sceneDepth : null };
   }
 
   function disposeTarget(target) {
@@ -864,7 +888,11 @@ export function createRaymarchRenderer(canvas, options = {}) {
     state.height = height;
 
     for (const key of Object.keys(targets)) disposeTarget(targets[key]);
-    targets.scene = makeTarget(width, height);
+    if (sceneDepth) {
+      gl.deleteRenderbuffer(sceneDepth);
+      sceneDepth = null;
+    }
+    targets.scene = makeTarget(width, height, true);
     const bw = Math.max(16, width >> 2);
     const bh = Math.max(16, height >> 2);
     targets.bloomA = makeTarget(bw, bh);
@@ -1009,6 +1037,7 @@ export function createRaymarchRenderer(canvas, options = {}) {
     gl.uniform1i(u.uClouds, setting('clouds'));
     gl.uniform1i(u.uGodRays, setting('godRays'));
     gl.uniform1f(u.uFar, frame.far ?? 12000);
+    gl.uniform1f(u.uNear, NEAR);
 
     const lightCount = gatherLights(world, camera);
     gl.uniform1i(u.uLightCount, lightCount);
@@ -1025,14 +1054,41 @@ export function createRaymarchRenderer(canvas, options = {}) {
       gl.uniform1f(u.uAvatarYaw, avatar.yaw);
       gl.uniform1f(u.uAvatarPhase, avatar.phase ?? 0);
       gl.uniform1f(u.uAvatarSpeed, avatar.speed ?? 0);
-      gl.uniform1i(u.uAvatarVisible, frame.firstPerson ? 0 : 1);
+      // The procedural avatar steps aside when an imported mesh is wearing it.
+      gl.uniform1i(u.uAvatarVisible, frame.firstPerson || frame.sdfAvatar === false ? 0 : 1);
       const look = avatar.appearance;
       gl.uniform4f(u.uAppearance, look.height, look.build, look.skinHue, look.glowHue);
       gl.uniform4f(u.uAppearance2, look.glowDensity, look.marking, look.queue, avatar.swimming ?? 0);
     } else {
       gl.uniform1i(u.uAvatarVisible, 0);
     }
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.ALWAYS);
+    gl.depthMask(true);
     drawTo(targets.scene);
+    gl.depthFunc(gl.LEQUAL);
+    gl.disable(gl.DEPTH_TEST);
+
+    // --- meshes -------------------------------------------------------------
+    // Imported content rasterizes into the same target, depth-testing against
+    // the surfaces the ray march just wrote.
+    let meshStats = { draws: 0, triangles: 0 };
+    if (frame.meshes !== false) {
+      const list = gatherMeshes(world);
+      if (list.length) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, targets.scene.framebuffer);
+        gl.viewport(0, 0, targets.scene.width, targets.scene.height);
+        meshStats = meshPass.draw(list, {
+          ...camera,
+          viewProjection: cameraMatrices(camera, state.width / state.height, NEAR, frame.far ?? 12000).viewProjection,
+        }, {
+          lightCount: Math.min(12, lightCount),
+          lightPos,
+          lightColor,
+          ambient: [0.055, 0.075, 0.125],
+        });
+      }
+    }
 
     // --- bloom --------------------------------------------------------------
     const bloomOn = setting('bloom') > 0;
@@ -1090,11 +1146,109 @@ export function createRaymarchRenderer(canvas, options = {}) {
       bloom: bloomOn,
       godRays: setting('godRays'),
       hdr: Boolean(hdr),
+      meshDraws: meshStats.draws,
+      meshTriangles: meshStats.triangles,
     };
+  }
+
+  /**
+   * Build this frame's draw list from the world.
+   *
+   * Slot transforms are already composed by the simulation, so this is a read:
+   * world matrix per renderer, and for skinned meshes the joint matrices its
+   * skin asset points at. Nothing here writes to the world.
+   */
+  function gatherMeshes(world) {
+    if (!world.stores.has('assets')) return [];
+    const assets = world.store('assets');
+    const ecs = world.ecs;
+    const list = [];
+    const scratch = { p: [0, 0, 0], r: [0, 0, 0, 1], s: [1, 1, 1] };
+
+    const worldMatrixOf = (handle, out) => {
+      const t = ecs.get(handle, 'WorldTransform');
+      scratch.p[0] = t.px; scratch.p[1] = t.py; scratch.p[2] = t.pz;
+      scratch.r[0] = t.rx; scratch.r[1] = t.ry; scratch.r[2] = t.rz; scratch.r[3] = t.rw;
+      scratch.s[0] = t.sx; scratch.s[1] = t.sy; scratch.s[2] = t.sz;
+      return transformMatrix(scratch, out);
+    };
+
+    for (const chunk of ecs.query(['MeshRenderer', 'WorldTransform'])) {
+      const mesh = chunk.col('MeshRenderer', 'mesh');
+      const material = chunk.col('MeshRenderer', 'material');
+      const visible = chunk.col('MeshRenderer', 'visible');
+      for (let i = 0; i < chunk.count; i++) {
+        if (!visible[i]) continue;
+        const asset = assets.get(mesh[i]);
+        if (!asset?.value) continue;
+        meshPass.upload(mesh[i], asset.value);
+        list.push({
+          mesh: mesh[i],
+          material: assets.value(material[i]),
+          texture: textureFor(assets, material[i]),
+          model: worldMatrixOf(chunk.entity(i), new Float32Array(16)),
+        });
+      }
+    }
+
+    for (const chunk of ecs.query(['SkinnedRenderer', 'WorldTransform'])) {
+      const mesh = chunk.col('SkinnedRenderer', 'mesh');
+      const material = chunk.col('SkinnedRenderer', 'material');
+      const skin = chunk.col('SkinnedRenderer', 'skin');
+      const visible = chunk.col('SkinnedRenderer', 'visible');
+      for (let i = 0; i < chunk.count; i++) {
+        if (!visible[i]) continue;
+        const asset = assets.get(mesh[i]);
+        const skinAsset = assets.get(skin[i]);
+        if (!asset?.value || !skinAsset?.value) continue;
+        meshPass.upload(mesh[i], asset.value);
+        list.push({
+          mesh: mesh[i],
+          material: assets.value(material[i]),
+          texture: textureFor(assets, material[i]),
+          // Skinning matrices are already world-space, so the model matrix is
+          // identity — the glTF contract, and the reason a skinned mesh ignores
+          // its own node transform.
+          model: IDENTITY,
+          bones: skinMatrices(skinAsset.value, ecs, worldMatrixOf),
+          boneCount: skinAsset.value.joints.length,
+        });
+      }
+    }
+    return list;
+  }
+
+  function textureFor(assets, materialId) {
+    const material = assets.value(materialId);
+    if (!material?.baseColorTexture) return null;
+    const image = assets.value(material.baseColorTexture);
+    if (!image) return null;
+    return meshPass.uploadTexture(material.baseColorTexture, image);
+  }
+
+  const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  const boneScratch = new Float32Array(16);
+  let boneBuffer = new Float32Array(0);
+
+  function skinMatrices(skin, ecs, worldMatrixOf) {
+    const count = skin.joints.length;
+    if (boneBuffer.length < count * 16) boneBuffer = new Float32Array(count * 16);
+    for (let j = 0; j < count; j++) {
+      const index = skin.joints[j];
+      const handle = index >= 0 && ecs._archOf[index] ? ecs._archOf[index].entities[ecs._rowOf[index]] : 0;
+      if (!handle || !ecs.alive(handle) || !ecs.has(handle, 'WorldTransform')) {
+        boneBuffer.set(IDENTITY, j * 16);
+        continue;
+      }
+      worldMatrixOf(handle, boneScratch);
+      multiplyInto(boneScratch, skin.inverseBind, j * 16, boneBuffer, j * 16);
+    }
+    return boneBuffer;
   }
 
   return {
     gl,
+    meshPass,
     render,
     resize,
     setQuality,
@@ -1126,6 +1280,19 @@ export function createRaymarchRenderer(canvas, options = {}) {
       gl.deleteVertexArray(vao);
     },
   };
+}
+
+/** world * inverseBind, written straight into the bone buffer. */
+function multiplyInto(a, b, bOffset, out, outOffset) {
+  for (let c = 0; c < 4; c++) {
+    for (let r = 0; r < 4; r++) {
+      out[outOffset + c * 4 + r] =
+        a[r] * b[bOffset + c * 4] +
+        a[4 + r] * b[bOffset + c * 4 + 1] +
+        a[8 + r] * b[bOffset + c * 4 + 2] +
+        a[12 + r] * b[bOffset + c * 4 + 3];
+    }
+  }
 }
 
 function hueToRgb(h) {

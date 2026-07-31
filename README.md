@@ -76,6 +76,42 @@ toggled individually. Resolution adapts to hold the frame budget.
 It is real-time ray *marching* (sphere tracing) with secondary rays, not
 hardware RTX.
 
+### Importing avatars
+
+Drag a `.vrm` or `.glb` onto the window and you are wearing it.
+
+```bash
+node tools/make-avatar.mjs      # authors a CC0 VRM 1.0 test avatar
+```
+
+The importer reads GLB and glTF 2.0 — accessors including sparse and
+interleaved, skins, morph targets, materials, embedded textures — plus VRM 1.0
+(`VRMC_vrm`) and VRM 0.x. It maps the rig two ways: believe the file when it
+declares a humanoid, and otherwise infer one from node names, which is what
+actually happens with an FBX exported out of Unity or Blender.
+`mixamorig:LeftForeArm`, `upper_arm.L`, `J_Bip_L_UpperArm`, and `LeftLowerArm`
+all land on the same canonical joint, and the result reports whether it was
+*declared* or *inferred* — because an importer that silently guesses wrong
+about `leftLowerArm` gives you an avatar whose elbow bends backwards.
+
+**On VRChat specifically:** `.vrca` files are proprietary Unity AssetBundles on
+VRChat's CDN, and pulling them down breaks both their terms and, usually, the
+creator's copyright. This engine imports the *authoring* formats — the same
+ones Resonite takes — so any avatar you legitimately own loads.
+
+An import does not produce "an avatar object". It produces **slots and
+components**: one slot per node, a renderer component on the ones that draw,
+mesh and material assets in the registry, and a tag on every bone naming its
+humanoid joint. Afterwards the avatar is ordinary world state — inspectable,
+re-parentable, checkpointed, and forkable like anything else.
+
+```
+latticeborn-testbed/Testbed/hips/spine/chest/upperChest/leftShoulder/leftUpperArm/leftLowerArm/leftHand
+```
+
+The file's own licence is surfaced, not buried: `avatarPermission`,
+`commercialUsage`, and author land in the event log and on screen.
+
 ### The same world, other senses
 
 ```bash

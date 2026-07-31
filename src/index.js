@@ -49,6 +49,36 @@ export {
   slopeAt,
 } from './core/terrain.js';
 export { DEFAULT_REGION_SIZE, RegionMemory, RegionState, TRAIL_HALF_LIFE } from './core/regions.js';
+export { GltfDocument, decomposeMatrix, parseGLB, readGltf } from './core/gltf.js';
+export {
+  EXPRESSIONS,
+  HUMANOID_BONES,
+  REQUIRED_BONES,
+  VISEMES,
+  boneSide,
+  buildRig,
+  classifyBoneName,
+  inferHumanoid,
+  mapVisemes,
+  measure as measureRig,
+  normalizeBoneName,
+  readVrm,
+} from './core/humanoid.js';
+export {
+  AssetRegistry,
+  SceneStore,
+  SlotFlags,
+  childrenOf,
+  createSlot,
+  descendantsOf,
+  destroySlot,
+  inspectSlot,
+  installScene,
+  setParent,
+  slotName,
+  slotPath,
+  transformMatrix,
+} from './core/scene.js';
 
 export {
   DEFAULT_CONFIG,
@@ -79,6 +109,7 @@ export {
   pandoraOptions,
   regionContents,
 } from './demo/pandora.js';
+export { BONE_TAG, findBones, importAvatar, importAvatarBytes, poseBone, poseWalk } from './demo/avatar.js';
 export { renderAscii, renderLegend } from './demo/renderers/ascii.js';
 export { renderAscii3d } from './demo/renderers/ascii3d.js';
 export { renderSemantic } from './demo/renderers/semantic.js';

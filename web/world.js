@@ -14,6 +14,9 @@ import { BIOME_NAMES, DEFAULT_APPEARANCE, SPECIES, avatarState, createPandora } 
 import { CameraRig, InputController } from '../src/demo/input.js';
 import { QUALITY, buildCamera, createRaymarchRenderer } from '../src/demo/renderers/raymarch.js';
 import { RegionState } from '../src/core/regions.js';
+import { findBones, importAvatarBytes, poseWalk } from '../src/demo/avatar.js';
+import { inspectSlot, slotPath } from '../src/core/scene.js';
+import { handleIndex } from '../src/core/ids.js';
 import { biomeAt, heightAt } from '../src/core/terrain.js';
 
 const ui = {
@@ -73,10 +76,56 @@ let walkPhase = 0;
 let accumulator = 0;
 let lastFrame = performance.now();
 let lastHud = 0;
+let wearing = null; // the imported avatar currently being worn, if any
 const perf = { fps: 60, frameMs: 16, simMs: 0, ticks: 0 };
 const memoryLog = [];
 
 // ---------------------------------------------------------------------------
+
+/** Import an avatar and wear it. Bytes in, slots out. */
+function wearAvatar(buffer, name) {
+  try {
+    if (wearing) {
+      // Replacing: the old body is slots like any other, so it just goes away.
+      const { destroySlot } = wearing.module;
+      destroySlot(world, wearing.root);
+      wearing = null;
+    }
+    const instance = importAvatarBytes(world, buffer, {
+      name,
+      targetEyeHeight: 2.6 * avatarState(world).appearance.height,
+    });
+    world.step(); // compose transforms once so it is not at the origin for a frame
+    wearing = {
+      ...instance,
+      bones: findBones(world, instance.root),
+      module: { destroySlot: destroySlotRef },
+      name,
+    };
+    const s = instance.summary;
+    banner(`wearing ${s.name} — ${s.bones} bones, ${s.triangles.toLocaleString()} triangles, rig ${s.confidence}`);
+    if (s.licence && s.licence.avatarPermission && s.licence.avatarPermission !== 'everyone') {
+      setTimeout(() => banner(`licence: ${s.name} may be worn by ${s.licence.avatarPermission}`), 2600);
+    }
+    return instance;
+  } catch (error) {
+    banner(`import failed: ${error.message}`);
+    console.error(error);
+    return null;
+  }
+}
+
+let destroySlotRef = null;
+
+async function loadDefaultAvatar() {
+  try {
+    const response = await fetch('/assets/avatars/latticeborn-testbed.vrm');
+    if (!response.ok) return;
+    wearAvatar(await response.arrayBuffer(), 'latticeborn-testbed');
+  } catch {
+    // No default avatar is not an error; the procedural body is the fallback.
+  }
+}
 
 function boot(seed) {
   world = createPandora(seed === undefined ? {} : { seed });
@@ -159,9 +208,13 @@ function frame(now) {
     { ...state, yaw: rig.yaw, pitch: rig.pitch },
     { firstPerson, distance: rig.distance, groundAt: ground },
   );
+  if (wearing) driveWornAvatar(state, dt);
+
   const stats = renderer.render(world, camera, {
     avatar: { ...state, phase: walkPhase, yaw: look.yaw },
     firstPerson,
+    // An imported body replaces the procedural one rather than wearing it.
+    sdfAvatar: !wearing,
     exposure: state.swimming ? 1.15 : 1.5,
   });
 
@@ -173,6 +226,30 @@ function frame(now) {
     updateHud(state, stats);
   }
   drawAtlas(state);
+}
+
+/**
+ * Put the worn avatar where the body is.
+ *
+ * The simulation owns position, heading, and gait; the imported slots are
+ * driven from that every frame. Nothing about the avatar is authoritative —
+ * delete it and the world carries on with the procedural body.
+ */
+function driveWornAvatar(state, dt) {
+  const feet = state.position.y - 2.6 * state.appearance.height;
+  const half = look.yaw * 0.5;
+  world.ecs.set(wearing.root, 'LocalTransform', {
+    px: state.position.x,
+    py: feet,
+    pz: state.position.z,
+    // Yaw only: an avatar that rolls with the camera looks possessed.
+    rx: 0, ry: Math.sin(half), rz: 0, rw: Math.cos(half),
+  });
+  poseWalk(world, wearing.bones, {
+    phase: walkPhase,
+    speed: state.speed,
+    grounded: state.grounded,
+  });
 }
 
 /** Keep the frame budget: resolution first, because it is the cheapest knob. */
@@ -588,7 +665,22 @@ function start() {
 
   syncOptionChecks();
   const settings = renderer.settings();
-  ui.gateWebgl.textContent = `WebGL2 ready${settings.hdr ? ' · HDR bloom' : ''} — quality presets up to max.`;
+  // Drag any .vrm/.glb onto the window to wear it.
+  addEventListener('dragover', (event) => event.preventDefault());
+  addEventListener('drop', async (event) => {
+    event.preventDefault();
+    const file = event.dataTransfer?.files?.[0];
+    if (!file) return;
+    banner(`reading ${file.name}…`);
+    wearAvatar(await file.arrayBuffer(), file.name.replace(/\.[^.]+$/, ''));
+  });
+
+  import('../src/core/scene.js').then((scene) => {
+    destroySlotRef = scene.destroySlot;
+    loadDefaultAvatar();
+  });
+
+  ui.gateWebgl.textContent = `WebGL2 ready${settings.hdr ? ' · HDR bloom' : ''} — quality presets up to max. Drag a .vrm or .glb in to wear it.`;
   requestAnimationFrame(frame);
 }
 
@@ -622,6 +714,12 @@ function escapeHtml(text) {
 // Exposed for the headless smoke test, which drives the same code path a
 // player does rather than a special one.
 window.latticeborn = {
+  get wearing() {
+    return wearing;
+  },
+  wearAvatar,
+  inspect: (handle) => inspectSlot(world, handle),
+  slotPath: (handle) => slotPath(world, handle),
   get world() {
     return world;
   },

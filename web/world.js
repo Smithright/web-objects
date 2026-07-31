@@ -44,6 +44,7 @@ const ui = {
   btnQuality: document.getElementById('btnQuality'),
   selQuality: document.getElementById('selQuality'),
   chkAdaptive: document.getElementById('chkAdaptive'),
+  chkTaa: document.getElementById('chkTaa'),
   chkGodRays: document.getElementById('chkGodRays'),
   chkBloom: document.getElementById('chkBloom'),
   chkClouds: document.getElementById('chkClouds'),
@@ -79,6 +80,7 @@ let checkpoint = null;
 let running = false;
 let firstPerson = false;
 let adaptive = true;
+let lastStats = null;
 let sensitivity = 1;
 let look = { yaw: 0, pitch: -0.12 };
 let walkPhase = 0;
@@ -231,6 +233,7 @@ function frame(now) {
     sdfAvatar: !wearing,
     exposure: state.swimming ? 1.15 : 1.5,
   });
+  lastStats = stats;
 
   if (adaptive) tuneResolution();
   // Throttle the HUD by wall clock, not by tick count: the tick rate varies
@@ -404,9 +407,11 @@ function handleBuildKey(event) {
     case 'KeyZ':
       world.submit({ op: 'build.undo', actor: 'player', payload: {} });
       banner(`undo: ${world.store('undo').labels.undo ?? 'nothing'}`);
+      renderer.resetHistory();
       return true;
     case 'KeyY':
       world.submit({ op: 'build.redo', actor: 'player', payload: {} });
+      renderer.resetHistory();
       return true;
     case 'BracketLeft':
     case 'BracketRight': {
@@ -466,6 +471,7 @@ function syncOptionChecks() {
   ui.chkClouds.checked = settings.clouds > 0;
   ui.chkReflection.checked = settings.reflection > 0;
   ui.chkIslands.checked = QUALITY[renderer.quality].islands > 0;
+  ui.chkTaa.checked = settings.taa > 0;
 }
 
 function applyEdgeActions(intent) {
@@ -474,6 +480,8 @@ function applyEdgeActions(intent) {
 
   if (intent.toggleView) {
     firstPerson = !firstPerson;
+    // Third to first person moves the eye several metres in one frame.
+    renderer.resetHistory();
     banner(firstPerson ? 'first person' : 'third person');
   }
   if (intent.recenter) {
@@ -572,6 +580,7 @@ function updatePanel(state, stats, totals) {
     ['volumetric shafts', settings.godRays ? `${settings.godRays} samples` : 'off'],
     ['bloom', settings.bloom ? `${settings.hdr ? 'HDR' : 'LDR'} 4-tap + gaussian` : 'off'],
     ['clouds', settings.clouds ? 'cloud deck' : 'off'],
+    ['temporal accumulation', settings.taa ? (stats.accumulated ? 'reprojecting' : 'warming up') : 'off'],
     ['render scale', { text: `${(renderer.stats.renderScale * 100).toFixed(0)}%`, cls: renderer.stats.renderScale > 1 ? 'good' : '' }],
     ['device pixels', `${renderer.pixelRatio.toFixed(2)}× of ${(devicePixelRatio || 1).toFixed(2)}×${renderer.stats.capped ? ' (capped)' : ''}`],
     ['resolution', `${stats.width}×${stats.height}`],
@@ -849,6 +858,7 @@ function start() {
   toggle(ui.chkClouds, 'clouds', 1);
   toggle(ui.chkReflection, 'reflection', 1);
   toggle(ui.chkIslands, 'islands', 1);
+  toggle(ui.chkTaa, 'taa', 1);
   ui.rngSensitivity.addEventListener('input', () => {
     sensitivity = Number(ui.rngSensitivity.value);
   });
@@ -883,10 +893,13 @@ function start() {
     world.load(checkpoint);
     const state = avatarState(world);
     look = { yaw: state.yaw, pitch: state.pitch };
+    // The camera teleported. Reprojection has no idea, so tell it.
+    renderer.resetHistory();
     banner(`restored tick ${checkpoint.tick} — hash ${world.hash()}`);
   });
   document.getElementById('btnNewSeed').addEventListener('click', () => {
     boot(Math.floor(Math.random() * 1e9));
+    renderer.resetHistory();
     banner(`new world · seed ${world.seed}`);
   });
 
@@ -1049,6 +1062,9 @@ window.latticeborn = {
   },
   get perf() {
     return perf;
+  },
+  get lastStats() {
+    return lastStats;
   },
   enter,
   banner,

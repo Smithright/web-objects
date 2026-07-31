@@ -412,7 +412,7 @@ export function createMeshPass(gl) {
  * the camera looks down +Z in its own basis and this is the matrix that agrees
  * with it. Derive it once here rather than tuning two things until they match.
  */
-export function cameraMatrices(camera, aspect, near = 0.05, far = 12000) {
+export function cameraMatrices(camera, aspect, near = 0.05, far = 12000, jitter = null) {
   const b = camera.basis; // columns: right, up, forward
   const p = camera.position;
   // View = basis transposed, then translate by -eye.
@@ -433,6 +433,13 @@ export function cameraMatrices(camera, aspect, near = 0.05, far = 12000) {
   projection[10] = (far + near) / (far - near);
   projection[11] = 1;
   projection[14] = (-2 * far * near) / (far - near);
+  if (jitter) {
+    // clip.xy += jitter * w, which is the same sub-pixel offset the ray
+    // marcher applies — otherwise rasterized meshes and traced terrain
+    // disagree about where the pixel centre is and the resolve fights itself.
+    projection[8] += jitter[0];
+    projection[9] += jitter[1];
+  }
 
   return { view, projection, viewProjection: multiply4(projection, view) };
 }

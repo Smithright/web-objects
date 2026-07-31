@@ -41,23 +41,23 @@ export const MAX_MARKS = 48;
 export const QUALITY = {
   low: {
     scale: 0.4, steps: 96, shadowSteps: 12, reflection: 0, ao: 0,
-    lights: 20, marks: 16, islands: 0, clouds: 0, godRays: 0, bloom: 0, bloomPasses: 0,
+    lights: 20, marks: 16, islands: 0, clouds: 0, godRays: 0, bloom: 0, bloomPasses: 0, taa: 0,
   },
   medium: {
     scale: 0.6, steps: 150, shadowSteps: 18, reflection: 1, ao: 4,
-    lights: 32, marks: 28, islands: 1, clouds: 1, godRays: 0, bloom: 1, bloomPasses: 2,
+    lights: 32, marks: 28, islands: 1, clouds: 1, godRays: 0, bloom: 1, bloomPasses: 2, taa: 1,
   },
   high: {
     scale: 0.85, steps: 220, shadowSteps: 26, reflection: 1, ao: 5,
-    lights: 48, marks: 48, islands: 1, clouds: 1, godRays: 12, bloom: 1, bloomPasses: 3,
+    lights: 48, marks: 48, islands: 1, clouds: 1, godRays: 12, bloom: 1, bloomPasses: 3, taa: 1,
   },
   ultra: {
     scale: 1, steps: 320, shadowSteps: 34, reflection: 1, ao: 6,
-    lights: 48, marks: 48, islands: 1, clouds: 1, godRays: 20, bloom: 1, bloomPasses: 4,
+    lights: 48, marks: 48, islands: 1, clouds: 1, godRays: 20, bloom: 1, bloomPasses: 4, taa: 1,
   },
   max: {
     scale: 1.35, steps: 420, shadowSteps: 44, reflection: 1, ao: 6,
-    lights: 48, marks: 48, islands: 1, clouds: 1, godRays: 28, bloom: 1, bloomPasses: 4,
+    lights: 48, marks: 48, islands: 1, clouds: 1, godRays: 28, bloom: 1, bloomPasses: 4, taa: 1,
   },
 };
 
@@ -104,6 +104,7 @@ uniform int uClouds;
 uniform int uGodRays;
 uniform float uFar;
 uniform float uNear;
+uniform vec2 uJitter;   // sub-pixel offset, in NDC
 
 uniform int uLightCount;
 uniform vec4 uLightPos[${MAX_LIGHTS}];
@@ -683,7 +684,10 @@ vec3 shadeScene(vec3 ro, vec3 rd, float dither, out float hitDistance) {
 }
 
 void main() {
-  vec2 uv = (vUv * 2.0 - 1.0) * vec2(uResolution.x / uResolution.y, 1.0);
+  // The jitter moves the sample within the pixel each frame; accumulating
+  // those samples over time is what buys the extra resolution.
+  vec2 ndc = (vUv * 2.0 - 1.0) + uJitter;
+  vec2 uv = ndc * vec2(uResolution.x / uResolution.y, 1.0);
   vec3 rd = normalize(uCamBasis * vec3(uv * uFov, 1.0));
   vec2 fc = mod(gl_FragCoord.xy, 2048.0);
   float dither = hashUnit2(int(fc.x), int(fc.y), uSeed + int(uTime * 60.0));
@@ -694,8 +698,8 @@ void main() {
   // Distance along the ray becomes view-space Z, then the same non-linear
   // mapping the rasterizer's projection matrix produces.
   float viewZ = max(uNear, hitDistance * dot(rd, normalize(uCamBasis[2])));
-  float ndc = (uFar + uNear) / (uFar - uNear) - (2.0 * uFar * uNear) / ((uFar - uNear) * viewZ);
-  gl_FragDepth = clamp(ndc * 0.5 + 0.5, 0.0, 1.0);
+  float ndcDepth = (uFar + uNear) / (uFar - uNear) - (2.0 * uFar * uNear) / ((uFar - uNear) * viewZ);
+  gl_FragDepth = clamp(ndcDepth * 0.5 + 0.5, 0.0, 1.0);
 }`;
 
 // The post passes run at half precision. Their inputs are display-range
@@ -735,6 +739,153 @@ void main() {
   color += texture(uSource, vUv + uDirection * 3.2307692308).rgb * 0.0702702703;
   color += texture(uSource, vUv - uDirection * 3.2307692308).rgb * 0.0702702703;
   fragColor = vec4(color, 1.0);
+}`;
+
+/**
+ * Temporal resolve.
+ *
+ * Reconstruct where this pixel is in the world from its depth, ask where that
+ * point was on screen last frame, and blend with what was there. Two things
+ * keep it from smearing: the history sample is rejected when it lands off
+ * screen or on a surface at a very different depth, and it is clamped to the
+ * range of its immediate neighbours in the current frame, which is what stops
+ * a moving object trailing a ghost behind it.
+ *
+ * There are no per-object motion vectors here, so this reprojects a static
+ * world correctly and lets genuinely moving geometry lean on the clamp.
+ */
+const RESOLVE_SHADER = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uScene;
+uniform sampler2D uHistory;
+uniform sampler2D uDepth;
+uniform mat4 uPrevViewProjection;
+uniform mat3 uCamBasis;
+uniform vec3 uCamPos;
+uniform vec2 uResolution;
+uniform vec2 uJitter;
+uniform float uFov;
+uniform float uNear;
+uniform float uFar;
+uniform float uBlend;
+uniform int uHasHistory;
+
+/**
+ * Catmull-Rom history fetch, five bilinear taps.
+ *
+ * Reprojection almost never lands on a texel centre, so the history is
+ * resampled every single frame. Do that bilinearly and the blur compounds:
+ * after twenty frames a converged image is a smear of its own past. A
+ * bicubic filter costs four extra fetches and keeps the edges.
+ */
+vec3 sampleHistory(vec2 uv) {
+  vec2 position = uv * uResolution;
+  vec2 centre = floor(position - 0.5) + 0.5;
+  vec2 f = position - centre;
+  vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+  vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+  vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+  vec2 w3 = f * f * (-0.5 + 0.5 * f);
+  // Fold the middle two taps into one bilinear fetch.
+  vec2 w12 = w1 + w2;
+  vec2 uv0 = (centre - 1.0) / uResolution;
+  vec2 uv3 = (centre + 2.0) / uResolution;
+  vec2 uv12 = (centre + w2 / w12) / uResolution;
+
+  vec3 sum = vec3(0.0);
+  float weight = 0.0;
+  sum += texture(uHistory, vec2(uv12.x, uv0.y)).rgb * (w12.x * w0.y);  weight += w12.x * w0.y;
+  sum += texture(uHistory, vec2(uv0.x, uv12.y)).rgb * (w0.x * w12.y);  weight += w0.x * w12.y;
+  sum += texture(uHistory, vec2(uv12.x, uv12.y)).rgb * (w12.x * w12.y); weight += w12.x * w12.y;
+  sum += texture(uHistory, vec2(uv3.x, uv12.y)).rgb * (w3.x * w12.y);  weight += w3.x * w12.y;
+  sum += texture(uHistory, vec2(uv12.x, uv3.y)).rgb * (w12.x * w3.y);  weight += w12.x * w3.y;
+  // The dropped corner taps carry a little weight; renormalise rather than
+  // let the image darken toward the edges of the kernel.
+  return max(sum / max(0.0001, weight), vec3(0.0));
+}
+
+float linearDepth(float depth) {
+  return (2.0 * uFar * uNear) / ((uFar + uNear) - (depth * 2.0 - 1.0) * (uFar - uNear));
+}
+
+void main() {
+  vec3 current = texture(uScene, vUv).rgb;
+  if (uHasHistory == 0) {
+    fragColor = vec4(current, 1.0);
+    return;
+  }
+
+  // Sky has no surface to reproject, but it is not stationary either — turn
+  // the camera and it slides across the screen like everything else. Treat it
+  // as a surface at the far plane, which is the right answer for rotation and
+  // close enough for translation when the far plane is 12 km away.
+  float depth = texture(uDepth, vUv).r;
+  bool sky = depth >= 0.999999;
+
+  // Depth -> view-space Z -> the world point this pixel saw.
+  float viewZ = sky ? uFar : linearDepth(depth);
+  vec2 ndc = (vUv * 2.0 - 1.0) + uJitter;
+  vec3 rd = normalize(uCamBasis * vec3(ndc * vec2(uResolution.x / uResolution.y, 1.0) * uFov, 1.0));
+  float forward = dot(rd, normalize(uCamBasis[2]));
+  vec3 world = uCamPos + rd * (viewZ / max(0.0001, forward));
+
+  vec4 previous = uPrevViewProjection * vec4(world, 1.0);
+  if (previous.w <= 0.0) {
+    fragColor = vec4(current, 1.0);
+    return;
+  }
+  vec2 historyUv = (previous.xy / previous.w) * 0.5 + 0.5;
+  if (any(lessThan(historyUv, vec2(0.0))) || any(greaterThan(historyUv, vec2(1.0)))) {
+    fragColor = vec4(current, 1.0);
+    return;
+  }
+
+  // Neighbourhood clip. A min/max box over the 3x3 is the obvious thing and
+  // it is too generous: one bright outlier widens the box enough to let a
+  // ghost through. Clip to the mean plus a multiple of the standard deviation
+  // instead — the box tracks how varied the neighbourhood actually is.
+  vec2 texel = 1.0 / uResolution;
+  vec3 m1 = vec3(0.0);
+  vec3 m2 = vec3(0.0);
+  for (int y = -1; y <= 1; y++) {
+    for (int x = -1; x <= 1; x++) {
+      vec3 neighbour = texture(uScene, vUv + vec2(float(x), float(y)) * texel).rgb;
+      m1 += neighbour;
+      m2 += neighbour * neighbour;
+    }
+  }
+  vec3 mean = m1 / 9.0;
+  vec3 sigma = sqrt(max(vec3(0.0), m2 / 9.0 - mean * mean));
+  vec3 lo = mean - sigma * 1.25;
+  vec3 hi = mean + sigma * 1.25;
+  vec3 history = clamp(sampleHistory(historyUv), lo, hi);
+
+  // Reject on a large depth disagreement — a silhouette edge that moved.
+  //
+  // There is no previous depth buffer to compare against, so this compares
+  // against the current one at the reprojected location: for a static world
+  // under a moving camera that is the same surface, and where it is not, the
+  // pixel was disoccluded and its history is worthless either way. The test
+  // is in metres with a relative tolerance, because a fixed threshold on the
+  // non-linear depth value means centimetres up close and kilometres out.
+  float historyDepth = texture(uDepth, historyUv).r;
+  bool historySky = historyDepth >= 0.999999;
+  float rejection;
+  if (sky || historySky) {
+    // Sky may only accumulate from sky, and vice versa.
+    rejection = (sky && historySky) ? 1.0 : 0.0;
+  } else {
+    rejection = abs(linearDepth(historyDepth) - viewZ) < max(0.25, viewZ * 0.08) ? 1.0 : 0.0;
+  }
+  // And fade the blend out as the reprojection approaches the screen edge,
+  // where there is no history to have.
+  vec2 edge = min(historyUv, 1.0 - historyUv);
+  float border = smoothstep(0.0, 0.04, min(edge.x, edge.y));
+
+  fragColor = vec4(mix(current, history, uBlend * rejection * border), 1.0);
 }`;
 
 const COMPOSITE_SHADER = `#version 300 es
@@ -783,6 +934,24 @@ void main() {
   float dither = float(hash2i(int(fc.x), int(fc.y), uSeed + int(uTime * 60.0))) / 4294967296.0;
   fragColor = vec4(color + (dither - 0.5) / 255.0, 1.0);
 }`;
+
+/** Halton sequence — low discrepancy, so N samples cover a pixel evenly. */
+function halton(index, base) {
+  let result = 0;
+  let fraction = 1;
+  let i = index;
+  while (i > 0) {
+    fraction /= base;
+    result += fraction * (i % base);
+    i = Math.floor(i / base);
+  }
+  return result;
+}
+
+const JITTER = Array.from({ length: 16 }, (_, i) => [
+  (halton(i + 1, 2) - 0.5) * 2,
+  (halton(i + 1, 3) - 0.5) * 2,
+]);
 
 function compile(gl, type, source) {
   const shader = gl.createShader(type);
@@ -839,13 +1008,17 @@ export function createRaymarchRenderer(canvas, options = {}) {
 
   const scene = link(gl, SCENE_SHADER, [
     'uResolution', 'uTime', 'uSeed', 'uCamPos', 'uCamBasis', 'uFov',
-    'uSteps', 'uShadowSteps', 'uReflection', 'uAO', 'uIslands', 'uClouds', 'uGodRays', 'uFar', 'uNear',
+    'uSteps', 'uShadowSteps', 'uReflection', 'uAO', 'uIslands', 'uClouds', 'uGodRays', 'uFar', 'uNear', 'uJitter',
     'uLightCount', 'uLightPos', 'uLightColor', 'uMarkCount', 'uMarks',
     'uAvatarPos', 'uAvatarYaw', 'uAvatarPhase', 'uAvatarSpeed', 'uAvatarVisible',
     'uAppearance', 'uAppearance2',
   ]);
   const bright = link(gl, BRIGHT_SHADER, ['uScene', 'uTexel', 'uThreshold']);
   const blur = link(gl, BLUR_SHADER, ['uSource', 'uDirection']);
+  const resolve = link(gl, RESOLVE_SHADER, [
+    'uScene', 'uHistory', 'uDepth', 'uPrevViewProjection', 'uCamBasis', 'uCamPos',
+    'uResolution', 'uJitter', 'uFov', 'uNear', 'uFar', 'uBlend', 'uHasHistory',
+  ]);
   const composite = link(gl, COMPOSITE_SHADER, [
     'uScene', 'uBloom', 'uBloomStrength', 'uExposure', 'uVignette', 'uTime', 'uSeed', 'uResolution',
   ]);
@@ -873,8 +1046,14 @@ export function createRaymarchRenderer(canvas, options = {}) {
   };
   const pendingQueries = [];
 
-  const targets = { scene: null, bloomA: null, bloomB: null };
+  const targets = { scene: null, bloomA: null, bloomB: null, historyA: null, historyB: null };
   let sceneDepth = null;
+  // Temporal state: the frame we accumulated into last time, and where the
+  // camera was when we did.
+  let historyIndex = 0;
+  let hasHistory = false;
+  let prevViewProjection = new Float32Array(16);
+  let frameIndex = 0;
   const meshPass = createMeshPass(gl);
   const NEAR = 0.05;
 
@@ -890,20 +1069,29 @@ export function createRaymarchRenderer(canvas, options = {}) {
     const framebuffer = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+    let depthTexture = null;
     if (depth) {
-      const buffer = gl.createRenderbuffer();
-      gl.bindRenderbuffer(gl.RENDERBUFFER, buffer);
-      gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, width, height);
-      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, buffer);
-      sceneDepth = buffer;
+      // A depth *texture*, not a renderbuffer: the mesh pass still depth-tests
+      // against it, and the temporal resolve needs to read it.
+      depthTexture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, depthTexture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, width, height, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, depthTexture, 0);
+      sceneDepth = depthTexture;
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    return { texture, framebuffer, width, height, depth: depth ? sceneDepth : null };
+    return { texture, framebuffer, width, height, depth: depthTexture };
   }
 
   function disposeTarget(target) {
     if (!target) return;
     gl.deleteTexture(target.texture);
+    if (target.depth) gl.deleteTexture(target.depth);
     gl.deleteFramebuffer(target.framebuffer);
   }
 
@@ -927,11 +1115,11 @@ export function createRaymarchRenderer(canvas, options = {}) {
     state.height = height;
 
     for (const key of Object.keys(targets)) disposeTarget(targets[key]);
-    if (sceneDepth) {
-      gl.deleteRenderbuffer(sceneDepth);
-      sceneDepth = null;
-    }
+    sceneDepth = null;
     targets.scene = makeTarget(width, height, true);
+    targets.historyA = makeTarget(width, height);
+    targets.historyB = makeTarget(width, height);
+    hasHistory = false; // a resize invalidates every reprojection
     const bw = Math.max(16, width >> 2);
     const bh = Math.max(16, height >> 2);
     targets.bloomA = makeTarget(bw, bh);
@@ -958,6 +1146,9 @@ export function createRaymarchRenderer(canvas, options = {}) {
       renderScale = overrides.scale ?? quality.scale;
       state.width = 0;
     }
+    // Turning accumulation back on must not resume from a history captured
+    // before it was turned off.
+    if (name === 'taa') hasHistory = false;
   }
 
   function setRenderScale(scale) {
@@ -972,6 +1163,17 @@ export function createRaymarchRenderer(canvas, options = {}) {
   function setPixelRatio(ratio) {
     pixelRatio = Math.max(0.5, Math.min(3, ratio));
     state.width = 0;
+  }
+
+  /**
+   * Throw the accumulated history away.
+   *
+   * Reprojection assumes the camera moved smoothly. Anything that breaks that —
+   * a teleport, an undo, a new seed — has to say so, or the next frame smears
+   * the old world across the new one.
+   */
+  function resetHistory() {
+    hasHistory = false;
   }
 
   /** Collect finished GPU timer results. Queries land a frame or two late. */
@@ -1112,6 +1314,15 @@ export function createRaymarchRenderer(canvas, options = {}) {
     gl.uniform1f(u.uFar, frame.far ?? 12000);
     gl.uniform1f(u.uNear, NEAR);
 
+    const taaOn = setting('taa') > 0 && frame.taa !== false;
+    // One sub-pixel offset per frame, in NDC. Meshes get the same offset baked
+    // into their projection matrix, or they and the terrain would disagree
+    // about where the pixel centre is.
+    const sample = taaOn ? JITTER[frameIndex % JITTER.length] : [0, 0];
+    const jitterX = taaOn ? sample[0] / state.width : 0;
+    const jitterY = taaOn ? sample[1] / state.height : 0;
+    gl.uniform2f(u.uJitter, jitterX, jitterY);
+
     const lightCount = gatherLights(world, camera);
     gl.uniform1i(u.uLightCount, lightCount);
     gl.uniform4fv(u.uLightPos, lightPos);
@@ -1151,10 +1362,8 @@ export function createRaymarchRenderer(canvas, options = {}) {
       if (list.length) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, targets.scene.framebuffer);
         gl.viewport(0, 0, targets.scene.width, targets.scene.height);
-        meshStats = meshPass.draw(list, {
-          ...camera,
-          viewProjection: cameraMatrices(camera, state.width / state.height, NEAR, frame.far ?? 12000).viewProjection,
-        }, {
+        const matrices = cameraMatrices(camera, state.width / state.height, NEAR, frame.far ?? 12000, [jitterX, jitterY]);
+        meshStats = meshPass.draw(list, { ...camera, viewProjection: matrices.viewProjection }, {
           lightCount: Math.min(12, lightCount),
           lightPos,
           lightColor,
@@ -1163,12 +1372,51 @@ export function createRaymarchRenderer(canvas, options = {}) {
       }
     }
 
+    // --- temporal resolve ---------------------------------------------------
+    // Blend this frame with where it was last frame. Everything downstream
+    // reads the resolved image, not the raw scene.
+    const history = historyIndex === 0 ? targets.historyA : targets.historyB;
+    const previous = historyIndex === 0 ? targets.historyB : targets.historyA;
+    let resolved = targets.scene;
+    if (taaOn) {
+      gl.useProgram(resolve.program);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, targets.scene.texture);
+      gl.uniform1i(resolve.uniforms.uScene, 0);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, previous.texture);
+      gl.uniform1i(resolve.uniforms.uHistory, 1);
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, targets.scene.depth);
+      gl.uniform1i(resolve.uniforms.uDepth, 2);
+      gl.uniformMatrix4fv(resolve.uniforms.uPrevViewProjection, false, prevViewProjection);
+      gl.uniformMatrix3fv(resolve.uniforms.uCamBasis, false, camera.basis);
+      gl.uniform3f(resolve.uniforms.uCamPos, camera.position.x, camera.position.y, camera.position.z);
+      gl.uniform2f(resolve.uniforms.uResolution, state.width, state.height);
+      gl.uniform2f(resolve.uniforms.uJitter, jitterX, jitterY);
+      gl.uniform1f(resolve.uniforms.uFov, camera.fov ?? 0.58);
+      gl.uniform1f(resolve.uniforms.uNear, NEAR);
+      gl.uniform1f(resolve.uniforms.uFar, frame.far ?? 12000);
+      gl.uniform1f(resolve.uniforms.uBlend, frame.taaBlend ?? 0.88);
+      gl.uniform1i(resolve.uniforms.uHasHistory, hasHistory ? 1 : 0);
+      drawTo(history);
+      resolved = history;
+      historyIndex = 1 - historyIndex;
+      hasHistory = true;
+    } else {
+      hasHistory = false;
+    }
+
+    // Remember where the camera was, for the next frame's reprojection.
+    prevViewProjection = cameraMatrices(camera, state.width / state.height, NEAR, frame.far ?? 12000).viewProjection;
+    frameIndex++;
+
     // --- bloom --------------------------------------------------------------
     const bloomOn = setting('bloom') > 0;
     if (bloomOn) {
       gl.useProgram(bright.program);
       gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, targets.scene.texture);
+      gl.bindTexture(gl.TEXTURE_2D, resolved.texture);
       gl.uniform1i(bright.uniforms.uScene, 0);
       gl.uniform2f(bright.uniforms.uTexel, 1 / state.width, 1 / state.height);
       gl.uniform1f(bright.uniforms.uThreshold, frame.bloomThreshold ?? 0.55);
@@ -1193,10 +1441,10 @@ export function createRaymarchRenderer(canvas, options = {}) {
     // --- composite ----------------------------------------------------------
     gl.useProgram(composite.program);
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, targets.scene.texture);
+    gl.bindTexture(gl.TEXTURE_2D, resolved.texture);
     gl.uniform1i(composite.uniforms.uScene, 0);
     gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, (bloomOn ? targets.bloomA : targets.scene).texture);
+    gl.bindTexture(gl.TEXTURE_2D, (bloomOn ? targets.bloomA : resolved).texture);
     gl.uniform1i(composite.uniforms.uBloom, 1);
     gl.uniform1f(composite.uniforms.uBloomStrength, bloomOn ? (frame.bloomStrength ?? 0.85) : 0);
     gl.uniform1f(composite.uniforms.uExposure, frame.exposure ?? 1.5);
@@ -1229,6 +1477,8 @@ export function createRaymarchRenderer(canvas, options = {}) {
       gpuMs: state.gpuMs,
       // Rays actually cast this frame, which is the number that scales.
       primaryRays: state.width * state.height,
+      taa: taaOn,
+      accumulated: taaOn && hasHistory,
     };
   }
 
@@ -1336,6 +1586,7 @@ export function createRaymarchRenderer(canvas, options = {}) {
     setOption,
     setRenderScale,
     setPixelRatio,
+    resetHistory,
     adapter,
     get pixelRatio() {
       return pixelRatio;
@@ -1361,6 +1612,7 @@ export function createRaymarchRenderer(canvas, options = {}) {
         godRays: setting('godRays'),
         bloom: setting('bloom'),
         lights: setting('lights'),
+        taa: setting('taa'),
         scale: renderScale,
         hdr: Boolean(hdr),
       };
@@ -1370,7 +1622,7 @@ export function createRaymarchRenderer(canvas, options = {}) {
     },
     dispose() {
       for (const key of Object.keys(targets)) disposeTarget(targets[key]);
-      for (const { program } of [scene, bright, blur, composite]) gl.deleteProgram(program);
+      for (const { program } of [scene, bright, blur, resolve, composite]) gl.deleteProgram(program);
       gl.deleteVertexArray(vao);
     },
   };

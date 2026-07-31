@@ -54,7 +54,7 @@ curve, so fine aim is actually fine.
 ### The renderer
 
 A WebGL2 fragment shader, one fullscreen triangle, no geometry of any kind, in
-three passes: HDR scene → bloom → tone-mapped composite. The scene pass imports
+four passes: HDR scene → temporal resolve → bloom → tone-mapped composite. The scene pass imports
 [`src/core/terrain.js`](src/core/terrain.js) — the *same* height field the
 simulation walks on, emitted as GLSL from the same file that defines the
 JavaScript — and marches primary rays against it. Then it casts secondary rays:
@@ -75,6 +75,29 @@ toggled individually. Resolution adapts to hold the frame budget.
 
 It is real-time ray *marching* (sphere tracing) with secondary rays, not
 hardware RTX.
+
+**Temporal accumulation.** A ray marcher's cost is linear in pixels, so the
+cheapest way to buy quality is to stop throwing frames away. Every frame jitters
+its sample within the pixel along a Halton (2, 3) sequence, and the resolve pass
+reconstructs each pixel's world position from depth, asks the previous frame's
+view-projection where that point used to be on screen, and blends. Sixteen
+jittered samples land in the same pixel over sixteen frames, which is what the
+edges are made of.
+
+The failure mode of every temporal filter is smearing, so three things push
+back. The history is fetched with a five-tap Catmull-Rom filter rather than
+bilinearly — reprojection never lands on a texel centre, and resampling
+bilinearly every frame compounds into blur. It is then clipped to the mean ±1.25σ
+of the 3×3 neighbourhood in the current frame, so a ghost cannot survive
+contact with the pixels around it. And it is rejected outright when the
+reprojection lands off screen, or on a surface more than 8% of its distance
+away — a disocclusion, whose history is about something else. Sky accumulates
+only from sky. Anything that breaks the smooth-motion assumption — undo, a
+restored checkpoint, a new seed, a switch between first and third person, a
+resolution change — throws the history away rather than smearing the old world
+across the new one.
+
+It is on from `medium` up, off on `low`, and there is a checkbox.
 
 **Performance.** Render targets are sized in *device* pixels, so on a Retina
 display "100%" means native rather than the quarter-resolution a CSS-pixel

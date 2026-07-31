@@ -1,7 +1,7 @@
 {
   "name": "latticeborn",
   "version": "0.1.0",
-  "description": "An open reality engine: entities, fields, semantic graph, event history, and interchangeable renderers.",
+  "description": "An open reality engine: a ray-traced, procedurally remembered world over entities, fields, a semantic graph, and an executable event history.",
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
@@ -17,6 +17,7 @@
     "README.md"
   ],
   "scripts": {
+    "walk": "node bin/latticeborn.js walk",
     "demo": "node bin/latticeborn.js demo",
     "verify": "node bin/latticeborn.js verify",
     "bench": "node bin/latticeborn.js bench",

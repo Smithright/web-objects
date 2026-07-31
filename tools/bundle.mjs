@@ -6,14 +6,23 @@
 // disk (a strict CSP, an offline copy, a pasted single file). It resolves the
 // ES module graph into a tiny registry and inlines the CSS and markup.
 //
-//   node tools/bundle.mjs [outfile]
+//   node tools/bundle.mjs [outfile] [--page world|grove]
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 
 const ROOT = resolve(new URL('..', import.meta.url).pathname);
-const ENTRY = join(ROOT, 'web/demo.js');
-const OUT = process.argv[2] ? resolve(process.argv[2]) : join(ROOT, 'dist/latticeborn-live-world.html');
+
+const PAGES = {
+  world: { entry: 'web/world.js', page: 'web/world.html', styles: ['web/world.css'], out: 'dist/latticeborn-pandora.html' },
+  grove: { entry: 'web/demo.js', page: 'web/demo.html', styles: ['web/styles.css', 'web/demo.css'], out: 'dist/latticeborn-grove.html' },
+};
+
+const flagIndex = process.argv.indexOf('--page');
+const PAGE = PAGES[flagIndex > 0 ? process.argv[flagIndex + 1] : 'world'] ?? PAGES.world;
+const positional = process.argv.slice(2).find((arg) => !arg.startsWith('--') && !PAGES[arg]);
+const ENTRY = join(ROOT, PAGE.entry);
+const OUT = positional ? resolve(positional) : join(ROOT, PAGE.out);
 
 const modules = new Map();
 
@@ -113,15 +122,17 @@ function __require(id) {
 `;
 
 const entryId = await collect(ENTRY);
-const styles = (await readFile(join(ROOT, 'web/styles.css'), 'utf8')) + '\n' + (await readFile(join(ROOT, 'web/demo.css'), 'utf8'));
-const page = await readFile(join(ROOT, 'web/demo.html'), 'utf8');
-const body = page.slice(page.indexOf('<body>') + 6, page.lastIndexOf('</body>'))
+const styles = (await Promise.all(PAGE.styles.map((file) => readFile(join(ROOT, file), 'utf8')))).join('\n');
+const page = await readFile(join(ROOT, PAGE.page), 'utf8');
+const bodyOpen = page.indexOf('>', page.indexOf('<body')) + 1;
+const body = page.slice(bodyOpen, page.lastIndexOf('</body>'))
   .replace(/<script[\s\S]*?<\/script>/g, '')
   // The bundled page stands alone: the sibling publication page is not with it.
   .replace(/href="index\.html"/g, 'href="#top"')
   .replace(/<a href="#top">Publication<\/a>\s*/, '');
 
-const html = `<title>Latticeborn — Live World</title>
+const title = /<title>([^<]*)<\/title>/.exec(page)?.[1] ?? 'Latticeborn';
+const html = `<title>${title}</title>
 <style>
 ${styles}
 </style>

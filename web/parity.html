@@ -1,0 +1,80 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Latticeborn — terrain parity</title>
+<link rel="stylesheet" href="world.css" />
+<!--
+  One terrain, two languages.
+
+  src/core/terrain.js defines the height field in JavaScript and exports the
+  GLSL twin the shader includes verbatim. This page evaluates both at the same
+  64 points and reports the disagreement. It should be float32-vs-float64
+  rounding and nothing else — if it ever is not, the avatar is walking on
+  terrain nobody can see.
+-->
+<body style="font-family: var(--mono, monospace); padding: 2rem; max-width: 60rem; margin: 0 auto">
+<h1 style="font-size:1.1rem">Terrain parity — CPU vs GPU</h1>
+<p id="verdict" style="color:#9fb4c9">evaluating…</p>
+<canvas id="c" width="64" height="1" style="display:none"></canvas>
+<table id="table" style="width:100%;border-collapse:collapse;font-size:0.75rem;color:#9fb4c9"></table>
+<script type="module">
+import { TERRAIN_GLSL, heightAt } from '../src/core/terrain.js';
+const SEED = 1755205;
+const points = [];
+for (let i = 0; i < 64; i++) {
+  points.push([(i - 32) * 137.5 + 1126, (i * 91.3) % 4000 - 1000]);
+}
+const gl = document.getElementById('c').getContext('webgl2');
+const vs = `#version 300 es
+void main(){ vec2 p = vec2(float((gl_VertexID<<1)&2), float(gl_VertexID&2)); gl_Position = vec4(p*2.0-1.0,0.0,1.0); }`;
+const fs = `#version 300 es
+precision highp float; precision highp int;
+out vec4 o;
+uniform int uSeed;
+uniform vec2 uPoints[64];
+${TERRAIN_GLSL}
+void main(){
+  int i = int(gl_FragCoord.x);
+  float h = heightAt(uPoints[i], uSeed);
+  // Encode signed height in [-2000, 2000] across three channels.
+  float n = clamp((h + 2000.0) / 4000.0, 0.0, 1.0);
+  float r = floor(n * 255.0) / 255.0;
+  float g = floor(fract(n * 255.0) * 255.0) / 255.0;
+  float b = fract(n * 65025.0);
+  o = vec4(r, g, b, 1.0);
+}`;
+function sh(t, src){ const s=gl.createShader(t); gl.shaderSource(s,src); gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
+const p = gl.createProgram();
+gl.attachShader(p, sh(gl.VERTEX_SHADER, vs));
+gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
+gl.linkProgram(p);
+if(!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+gl.useProgram(p);
+gl.bindVertexArray(gl.createVertexArray());
+gl.uniform1i(gl.getUniformLocation(p,'uSeed'), SEED);
+gl.uniform2fv(gl.getUniformLocation(p,'uPoints'), new Float32Array(points.flat()));
+gl.viewport(0,0,64,1);
+gl.drawArrays(gl.TRIANGLES,0,3);
+const px = new Uint8Array(64*4);
+gl.readPixels(0,0,64,1,gl.RGBA,gl.UNSIGNED_BYTE,px);
+const out = [];
+for (let i=0;i<64;i++){
+  const n = px[i*4]/255 + px[i*4+1]/65025 + px[i*4+2]/16581375;
+  const gpu = n*4000 - 2000;
+  const cpu = heightAt(points[i][0], points[i][1], SEED);
+  out.push({ x: points[i][0], z: points[i][1], gpu: +gpu.toFixed(2), cpu: +cpu.toFixed(2), diff: +Math.abs(gpu-cpu).toFixed(2) });
+}
+const max = Math.max(...out.map(o => o.diff));
+window.probe = { max, worst: out.slice().sort((a,b)=>b.diff-a.diff).slice(0,3), sample: out.slice(0,4) };
+
+const verdict = document.getElementById('verdict');
+verdict.textContent = max < 0.5
+  ? `PASS — 64 points, worst disagreement ${max.toFixed(3)} m (float32 vs float64 rounding).`
+  : `FAIL — worst disagreement ${max.toFixed(3)} m. The shader and the simulation are describing different worlds.`;
+verdict.style.color = max < 0.5 ? '#58d6c9' : '#f2726f';
+
+const rows = out.slice().sort((a, b) => b.diff - a.diff).slice(0, 16);
+document.getElementById('table').innerHTML =
+  '<tr style="text-align:left;color:#64798f"><th>x</th><th>z</th><th>cpu (m)</th><th>gpu (m)</th><th>diff</th></tr>' +
+  rows.map((r) => `<tr><td>${r.x.toFixed(0)}</td><td>${r.z.toFixed(0)}</td><td>${r.cpu.toFixed(3)}</td><td>${r.gpu.toFixed(3)}</td><td>${r.diff.toFixed(3)}</td></tr>`).join('');
+</script>

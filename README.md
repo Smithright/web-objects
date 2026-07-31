@@ -2,43 +2,112 @@
 
 **The world is not the renderer.**
 
-An open reality engine: the canonical world is a temporal record of identities,
-components, fields, relationships, laws, and events. Renderers — a browser
-canvas, a terminal, an agent's affordance list — receive filtered *projections*
-of that world. None of them owns truth.
+An open reality engine. The canonical world is a temporal record of identities,
+components, fields, relationships, laws, and events. Renderers — a ray tracer, a
+terminal, an agent's list of affordances — receive filtered *projections* of it.
+None of them owns truth.
 
-This repository contains the [publication draft](web/index.html) of the
-architecture and a **working reference implementation** of its spine: Phase 0
-(contracts) and Phase 1 (single-node world), plus the projection layer and a
-live browser client from Phase 2.
+The default world is **Pandora**: a bioluminescent moon with no terrain file, no
+scene graph, and no meshes. Every ridge, plant, and drifting seed is a pure
+function of one seed and a coordinate. Nothing exists until somebody looks at
+it — and the moment somebody does, that region starts keeping a history.
 
-Zero dependencies. No build step. Runs unmodified in Node and in a browser.
-
----
-
-## Run it
+You wake up facing a mountain. It is 1.45 km of snow-capped relief four
+kilometres away, it is in the same place on every machine that computes this
+seed, and it is stored nowhere: it is a term in the height function.
 
 ```bash
-node bin/latticeborn.js demo      # the reference world, rendered as ASCII
-node bin/latticeborn.js verify    # determinism, replay, rollback, branching — proven
-node bin/latticeborn.js inspect   # one entity, rendered with no pixels at all
-node bin/latticeborn.js bench     # entity-ticks per second across populations
-node bin/latticeborn.js chunk     # terrain regenerated from causes alone
-
-npm test                          # 48 checks across substrate and runtime
-npm run serve                     # publication + live world on localhost:8080
+npm run serve      # then open http://localhost:8080
+npm run walk       # or walk the same world in your terminal
+npm test           # 66 checks across the substrate, runtime, and world
 ```
-
-`npm run serve` then open <http://localhost:8080/demo> — the browser client
-imports the engine straight out of `src/` as ES modules. Nothing is compiled,
-minified, or transpiled between the source you read and the world that runs.
-
-`node tools/bundle.mjs` folds that same client into one self-contained HTML
-file for environments that cannot fetch modules from disk.
 
 ---
 
-## What `verify` proves
+## Pandora
+
+Walk it with **WASD + mouse** or **any standard gamepad**. Third or first
+person. Your avatar is customizable and its appearance is *world state*, not a
+client setting — changing it submits a command that lands in the event log.
+
+What "procedurally remembered" means, concretely:
+
+| | |
+| --- | --- |
+| **Latent** | Nobody has been here. It occupies zero bytes and is not stored anywhere. It will resolve to the same terrain and the same plants the first time anyone looks. |
+| **Resident** | Someone is here. Entities exist, systems run, and everything consequential is appended to this region's log. |
+| **Remembered** | They left. The entities are gone, the state is gone, the log is not. Returning regenerates default reality from the causes and replays your divergence over it. |
+
+So: your footfalls stay lit and fade on a deterministic curve. Plants remember
+the first time you walked past them. A plant you take stays taken — walk a
+kilometre away until the region unloads, come back, and the gap is still there.
+A light you plant never fades at all. The HUD shows what it costs: a few KiB of
+history where materialized state would have been megabytes.
+
+**Controls** — `WASD`/arrows move, mouse look, `space` jump, `shift` sprint,
+`E` take a plant, `Q` plant a light, `V` first/third person, `Tab` panel,
+`Esc` release the pointer. Gamepad follows the W3C Standard Mapping: left stick
+moves, right stick looks, `A` jumps, `L3`/right trigger sprints, `X` takes,
+`Y` plants, `RB` switches view — with a radial deadzone and an expo response
+curve, so fine aim is actually fine.
+
+### The renderer
+
+A WebGL2 fragment shader, one fullscreen triangle, no geometry of any kind, in
+three passes: HDR scene → bloom → tone-mapped composite. The scene pass imports
+[`src/core/terrain.js`](src/core/terrain.js) — the *same* height field the
+simulation walks on, emitted as GLSL from the same file that defines the
+JavaScript — and marches primary rays against it. Then it casts secondary rays:
+soft shadows, water reflection, ambient occlusion, and volumetric shafts. Flora
+light, footprint memory, and the avatar arrive as uniforms drawn from world
+state.
+
+That shared-terrain detail is the whole point. If the CPU and GPU each had their
+own copy of the world they would drift apart by the third week, and the avatar
+would walk on terrain nobody can see. Open `/parity.html` to watch both
+evaluate the same 64 points and disagree only in float32 rounding.
+
+Also in the frame: a gas giant with banded storms, aurora, a drifting cloud
+deck, floating islands on a hash lattice, a snow line that wavers with the
+terrain noise, and sparkle on the snow. Presets run `low` → `max`; `max` is
+supersampled at 1.7× with every secondary ray enabled, and each of them can be
+toggled individually. Resolution adapts to hold the frame budget.
+
+It is real-time ray *marching* (sphere tracing) with secondary rays, not
+hardware RTX.
+
+### The same world, other senses
+
+```bash
+node bin/latticeborn.js walk      # Pandora, ray-marched into characters
+```
+
+The terminal renderer imports the identical height field and marches identical
+rays into a character grid. It exists to make the engine's central claim
+falsifiable: if the world is really independent of the renderer, a terminal is
+just a very low-bandwidth display.
+
+---
+
+## The Grove
+
+A second world on the same engine, for the parts Pandora does not exercise:
+dense agent simulation, the semantic graph, interest-managed replication, and
+counterfactual branching.
+
+```bash
+node bin/latticeborn.js demo      # 1000 entities, ASCII, three observers
+node bin/latticeborn.js verify    # the proofs, run live
+```
+
+Beacons radiate heat into a continuous field. Motes fall through their gravity.
+Foragers run **capability-sandboxed** behavior — and roughly six percent of them
+run a law that reaches for authority it was never granted, so you can watch the
+host deny it, that agent lose its turn, and the tick continue. Open
+`/grove` in the browser for the live version with a schedule view, a projection
+bandwidth meter, a checkpoint rail, and a side-by-side counterfactual branch.
+
+### What `verify` proves
 
 ```
 ✓ determinism          two independent runs of 600 ticks agree at ad7e0389
@@ -51,8 +120,10 @@ file for environments that cannot fetch modules from disk.
 ✓ schema guard         a checkpoint cannot be loaded into a world with a different schema
 ```
 
-These are not assertions about intent. Each one runs the engine and compares
-state hashes.
+Not assertions about intent — each one runs the engine and compares state hashes.
+`npm test` adds 66 more, including that a *play session* replays: the same
+inputs from the same checkpoint reproduce the same walk, hash for hash. Input
+reaches the avatar only as commands, so a traversal is a recording, not a video.
 
 ---
 
@@ -60,77 +131,87 @@ state hashes.
 
 | Layer | File | What it is |
 | --- | --- | --- |
-| Identity | [`src/core/ids.js`](src/core/ids.js) | Packed handles with generations; stable cross-universe keys |
-| Substrate | [`src/core/ecs.js`](src/core/ecs.js) | Archetype tables, one typed array per component field |
-| | [`src/core/fields.js`](src/core/fields.js) | Continuous scalar fields: diffusion, decay, sampling, gradients |
-| | [`src/core/graph.js`](src/core/graph.js) | Semantic graph with provenance and tombstoned history |
-| | [`src/core/spatial.js`](src/core/spatial.js) | Uniform hash grid and the LOD ladder |
-| Runtime | [`src/core/scheduler.js`](src/core/scheduler.js) | Hazard DAG derived from declared reads/writes; waves; rate limits |
-| | [`src/core/laws.js`](src/core/laws.js) | Capability-secured behavior with metered budgets |
-| | [`src/core/world.js`](src/core/world.js) | Commands, ticks, checkpoints, replay, forking, state hashing |
-| Durability | [`src/core/events.js`](src/core/events.js) | Append-only log, causal parents, seal chain |
-| | [`src/core/procedural.js`](src/core/procedural.js) | Chunks as pure functions of immutable causes |
-| Projection | [`src/core/projection.js`](src/core/projection.js) | Interest horizons, deltas, P0–P4 priority, bandwidth budget |
-| Views | [`src/demo/renderers/canvas.js`](src/demo/renderers/canvas.js) | Pixels |
-| | [`src/demo/renderers/ascii.js`](src/demo/renderers/ascii.js) | Glyphs |
-| | [`src/demo/renderers/semantic.js`](src/demo/renderers/semantic.js) | Affordances, relations, causal history — no pixels |
-| World | [`src/demo/testbed.js`](src/demo/testbed.js) | "The Grove": the reference world every command above runs |
+| Identity | [`core/ids.js`](src/core/ids.js) | Packed handles with generations; stable cross-universe keys |
+| Substrate | [`core/ecs.js`](src/core/ecs.js) | Archetype tables, one typed array per component field |
+| | [`core/terrain.js`](src/core/terrain.js) | The height field, in JavaScript and in GLSL, from one definition |
+| | [`core/fields.js`](src/core/fields.js) | Continuous scalar fields: diffusion, decay, sampling, gradients |
+| | [`core/graph.js`](src/core/graph.js) | Semantic graph with provenance and tombstoned history |
+| | [`core/spatial.js`](src/core/spatial.js) | Uniform hash grid and the LOD ladder |
+| Runtime | [`core/scheduler.js`](src/core/scheduler.js) | Hazard DAG derived from declared reads/writes; waves; rate limits |
+| | [`core/laws.js`](src/core/laws.js) | Capability-secured behavior with metered budgets |
+| | [`core/world.js`](src/core/world.js) | Commands, ticks, checkpoints, replay, forking, state hashing |
+| Durability | [`core/events.js`](src/core/events.js) | Append-only log, causal parents, seal chain |
+| | [`core/regions.js`](src/core/regions.js) | Procedural memory: latent → resident → remembered |
+| | [`core/procedural.js`](src/core/procedural.js) | Chunks as pure functions of immutable causes |
+| Projection | [`core/projection.js`](src/core/projection.js) | Interest horizons, deltas, P0–P4 priority, bandwidth budget |
+| Views | [`demo/renderers/raymarch.js`](src/demo/renderers/raymarch.js) | Ray-traced pixels (WebGL2) |
+| | [`demo/renderers/ascii3d.js`](src/demo/renderers/ascii3d.js) | Ray-traced characters (terminal) |
+| | [`demo/renderers/canvas.js`](src/demo/renderers/canvas.js) | 2D pixels |
+| | [`demo/renderers/semantic.js`](src/demo/renderers/semantic.js) | Affordances, relations, causal history — no pixels |
+| Worlds | [`demo/pandora.js`](src/demo/pandora.js) | The default world |
+| | [`demo/testbed.js`](src/demo/testbed.js) | The Grove |
+| Input | [`demo/input.js`](src/demo/input.js) | Keyboard, mouse, gamepad → one intent → one command |
 
 ---
 
-## The Grove
+## Four design decisions worth reading the code for
 
-Six beacons radiate heat into a continuous field. Eight hundred motes fall
-through their gravity. Two hundred foragers run sandboxed behavior: they read
-the heat gradient, steer toward warmth, metabolize it, reproduce, and starve.
-Lineage and territory accrue in the semantic graph. Every birth, death,
-utterance, and operator command lands in the event log.
+**One terrain, two languages.** `terrain.js` defines an integer hash, value
+noise, and domain-warped fBm in JavaScript, and exports the GLSL twin as a
+string the shader includes verbatim. The CPU places the avatar's feet with it;
+the GPU shades with it; a test asserts they declare the same functions.
 
-Roughly six percent of foragers run `forage.rogue` — the same behavior, but it
-reaches for a capability it was never granted. The host denies the read, that
-agent loses its turn, and the tick continues. You can watch the denial counter
-climb in both clients.
-
-Population is not scripted. It crashes to about a third of its starting size as
-the initial heat is eaten, then recovers to a carrying capacity set by how fast
-the beacons can radiate.
-
----
-
-## Three design decisions worth reading the code for
-
-**Canonical row order.** Archetype rows are kept sorted by entity index at all
-times — insert and delete are memmoves, not swap-removes. Row order determines
-the order floating-point accumulations happen in, so making it canonical is
-what makes replay bit-exact *and* makes observing a world (checkpointing,
-forking, snapshotting) incapable of perturbing it. See `Archetype.insertRow`.
+**Canonical row order.** Archetype rows stay sorted by entity index at all times
+— insert and delete are memmoves, not swap-removes. Row order decides the order
+floating-point accumulations happen in, so making it canonical is what makes
+replay bit-exact *and* makes observing a world (checkpointing, forking,
+snapshotting) incapable of perturbing it.
 
 **Denial is the default.** A law reaches the world only through paths its grant
 names, and only paths with a registered provider exist at all. A capability
-fault rolls the whole invocation back — a half-applied intent is worse than no
-intent. See `LawHost.invoke`.
+fault rolls the whole invocation back — a half-applied intent is worse than none.
 
 **Projections are lossy on purpose.** When a client's tick budget runs out, low
 priority is *dropped*, not queued. A renderer can always reconstruct cosmetic
-detail; it can never invent authority state. Typical observers in the demo
-receive 70–95% less than full replication would cost. See `ProjectionServer.snapshot`.
+detail; it can never invent authority state.
 
 ---
 
-## Scope
+## Scope, honestly
 
-Implemented: schema registry and component ABI, archetype ECS, hazard
-scheduler, sealed event log, checkpoints, replay, rollback, universe branching,
-continuous fields, semantic graph, spatial index and LOD, capability sandbox,
-procedural genesis with mutation logs, projection with interest management, and
-three renderers.
+Implemented: schema registry and component ABI, archetype ECS, hazard scheduler,
+sealed event log, checkpoints, replay, rollback, universe branching, region
+memory, continuous fields, semantic graph, spatial index and LOD, capability
+sandbox, procedural genesis with mutation logs, interest-managed projection, a
+ray-traced renderer, three other renderers, and full keyboard/mouse/gamepad
+input.
 
-Not implemented, and described in the publication as future work: the C17 core
-ABI and Rust services, Jolt physics, the NATS/JetStream fabric, PostgreSQL and
-Apache AGE persistence, real WebAssembly law components under Wasmtime, region
-migration and distribution, and the O3DE, Godot, and WebGPU clients. The
-reference core is JavaScript so that one implementation can run in a terminal
-and a browser without a toolchain — it is the spine, not the skin.
+Not implemented, and described in the [publication draft](web/index.html) as
+future work: the C17 core ABI and Rust services, Jolt physics, the
+NATS/JetStream fabric, PostgreSQL and Apache AGE persistence, real WebAssembly
+law components under Wasmtime, region migration and distribution, and the O3DE,
+Godot, and WebGPU clients. The reference core is JavaScript so one
+implementation runs in a terminal and a browser without a toolchain. It is the
+spine, not the skin.
+
+## Credits
+
+No third-party code is bundled — there are no dependencies at all — but the
+renderer stands on well-known open technique:
+
+- **Inigo Quilez** ([iquilezles.org](https://iquilezles.org), MIT): height field
+  marching with binary refinement, analytic soft shadows, domain-warped fBm, and
+  the SDF primitives the avatar is built from.
+- **John C. Hart**, *Sphere Tracing* (1996): the distance-field marching the
+  floating islands and the avatar use.
+- **Stephen Hill** (MIT): the ACES filmic tone-mapping curve fit.
+- **Christophe Schlick** (1994): the Fresnel approximation on the water.
+- **W3C Gamepad API** Standard Mapping: the controller layout.
+
+Pandora, the Na'vi, and the Hallelujah Mountains are creations of James Cameron
+and 20th Century Studios. This is an unaffiliated technical demonstration that
+takes visual inspiration from them; it ships no assets from those films, and
+every pixel here is generated from noise functions in this repository.
 
 ---
 

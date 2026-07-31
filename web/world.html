@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="A ray-traced, procedurally remembered world running on the Latticeborn engine. Walk it with keyboard, mouse, or a controller — wherever you go starts keeping a history." />
+  <meta name="theme-color" content="#05090f" />
+  <title>Latticeborn — Pandora</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2305090f'/%3E%3Ctext x='16' y='23' font-size='20' text-anchor='middle' fill='%2358d6c9'%3E%E2%8C%98%3C/text%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="world.css" />
+</head>
+<body class="world-body">
+  <canvas id="view" aria-label="Ray-traced view of Pandora"></canvas>
+
+  <div id="hud" class="hud">
+    <section class="hud-corner top-left">
+      <div class="chip"><b id="hudUniverse">pandora</b> <span id="hudSeed">seed —</span></div>
+      <dl class="readout" id="hudWorld"></dl>
+    </section>
+
+    <section class="hud-corner top-right">
+      <dl class="readout right" id="hudPerf"></dl>
+      <div class="chip-row">
+        <button class="chip button-chip" id="btnQuality" type="button">quality: medium</button>
+        <button class="chip button-chip" id="btnPanel" type="button">panel · tab</button>
+      </div>
+    </section>
+
+    <section class="hud-corner bottom-left">
+      <div class="atlas-block">
+        <canvas id="atlas" width="180" height="180" aria-label="Region memory map"></canvas>
+        <div class="atlas-legend">
+          <span><i class="dot resident"></i>resident</span>
+          <span><i class="dot remembered"></i>remembered</span>
+          <span><i class="dot latent"></i>latent</span>
+        </div>
+      </div>
+      <dl class="readout" id="hudMemory"></dl>
+    </section>
+
+    <section class="hud-corner bottom-right">
+      <p class="hint" id="hudDevice">keyboard + mouse</p>
+      <p class="hint keys">
+        <b>WASD</b> move · <b>mouse</b> look · <b>space</b> jump · <b>shift</b> sprint<br />
+        <b>E</b> take a plant · <b>Q</b> plant a light · <b>V</b> view · <b>Esc</b> release
+      </p>
+      <p class="hint keys pad">
+        <b>left stick</b> move · <b>right stick</b> look · <b>A</b> jump · <b>L3/RT</b> sprint · <b>X</b> take · <b>Y</b> plant · <b>RB</b> view
+      </p>
+    </section>
+
+    <div class="crosshair" id="crosshair" hidden></div>
+    <p class="banner" id="banner"></p>
+  </div>
+
+  <aside class="panel" id="panel" hidden>
+    <header class="panel-head">
+      <h1>Pandora</h1>
+      <button class="link-button" id="btnClosePanel" type="button">close</button>
+    </header>
+
+    <section>
+      <h2>Avatar</h2>
+      <p class="note">Appearance is a component. Changing it submits a command, which lands in the event log like everything else.</p>
+      <div class="sliders" id="sliders"></div>
+      <div class="chip-row">
+        <button class="chip button-chip" id="btnRandomLook" type="button">randomize</button>
+        <button class="chip button-chip" id="btnResetLook" type="button">reset</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>This place remembers</h2>
+      <p class="note">A region exists as a formula until somebody witnesses it. From then on it keeps a log — and the log, not the state, is what is stored.</p>
+      <dl class="readout" id="panelMemory"></dl>
+      <div class="log" id="memoryLog"></div>
+    </section>
+
+    <section>
+      <h2>Renderer</h2>
+      <p class="note">Primary rays march the same height field the simulation walks on. Shadows, water reflection, and ambient occlusion are secondary rays.</p>
+      <dl class="readout" id="panelRender"></dl>
+      <label class="row"><span>quality</span>
+        <select id="selQuality">
+          <option value="low">low</option>
+          <option value="medium" selected>medium</option>
+          <option value="high">high</option>
+          <option value="ultra">ultra</option>
+          <option value="max">max — supersampled</option>
+        </select>
+      </label>
+      <label class="row"><span>adaptive resolution</span><input type="checkbox" id="chkAdaptive" checked /></label>
+      <label class="row"><span>volumetric shafts</span><input type="checkbox" id="chkGodRays" /></label>
+      <label class="row"><span>bloom</span><input type="checkbox" id="chkBloom" checked /></label>
+      <label class="row"><span>cloud deck</span><input type="checkbox" id="chkClouds" checked /></label>
+      <label class="row"><span>water reflection</span><input type="checkbox" id="chkReflection" checked /></label>
+      <label class="row"><span>floating islands</span><input type="checkbox" id="chkIslands" checked /></label>
+      <label class="row"><span>invert look Y</span><input type="checkbox" id="chkInvert" /></label>
+      <label class="row"><span>look sensitivity</span><input type="range" id="rngSensitivity" min="0.5" max="2.5" step="0.1" value="1" /></label>
+    </section>
+
+    <section>
+      <h2>World</h2>
+      <dl class="readout" id="panelWorld"></dl>
+      <div class="chip-row">
+        <button class="chip button-chip" id="btnCheckpoint" type="button">checkpoint</button>
+        <button class="chip button-chip" id="btnRestore" type="button">restore</button>
+        <button class="chip button-chip" id="btnNewSeed" type="button">new seed</button>
+      </div>
+      <p class="note" id="checkpointNote">A checkpoint captures entities, fields, the semantic graph, and region memory. Restoring one puts the world — and everything it remembers — back exactly.</p>
+    </section>
+
+    <footer class="panel-foot">
+      <a href="index.html">architecture</a> ·
+      <a href="demo.html">the grove</a> ·
+      <span>Apache-2.0</span>
+    </footer>
+  </aside>
+
+  <div class="gate" id="gate">
+    <div class="gate-card">
+      <p class="eyebrow">LATTICEBORN · RAY-TRACED · PROCEDURALLY REMEMBERED</p>
+      <h1>Nothing here exists<br />until you look at it.</h1>
+      <p>
+        Every ridge, plant, and drifting seed is a pure function of one seed and a coordinate — no terrain file, no
+        scene graph, no meshes. The moment you witness a region it starts keeping a history: your footfalls stay lit,
+        the plants remember the first time you passed, and anything you take stays taken.
+      </p>
+      <button class="button primary" id="btnEnter" type="button">Enter the world</button>
+      <p class="gate-note">Keyboard and mouse, or plug in a controller. <span id="gateWebgl"></span></p>
+    </div>
+  </div>
+
+  <script type="module" src="world.js"></script>
+</body>
+</html>

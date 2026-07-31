@@ -27,8 +27,11 @@ const TYPES = {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   let path = decodeURIComponent(url.pathname);
-  if (path === '/') path = '/index.html';
-  if (path === '/demo') path = '/demo.html';
+  // Pandora is the default world, so it is what the root serves.
+  if (path === '/') path = '/world.html';
+  if (path === '/world') path = '/world.html';
+  if (path === '/architecture') path = '/index.html';
+  if (path === '/grove' || path === '/demo') path = '/demo.html';
   // The web clients live in web/ but address each other from the site root, so
   // that is where they are mounted. Everything else resolves from the repo root
   // — which is how demo.js imports the engine straight out of src/.
@@ -60,6 +63,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`Latticeborn web clients on http://localhost:${PORT}`);
-  console.log(`  publication  http://localhost:${PORT}/`);
-  console.log(`  live world   http://localhost:${PORT}/demo`);
+  console.log(`  pandora       http://localhost:${PORT}/          (ray-traced, remembered)`);
+  console.log(`  architecture  http://localhost:${PORT}/architecture`);
+  console.log(`  the grove     http://localhost:${PORT}/grove`);
 });

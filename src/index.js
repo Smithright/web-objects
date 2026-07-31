@@ -34,6 +34,21 @@ export {
 } from './core/procedural.js';
 export { ClientView, Priority, ProjectionServer } from './core/projection.js';
 export { CHECKPOINT_VERSION, World } from './core/world.js';
+export {
+  Biome as TerrainBiome,
+  SEA_LEVEL,
+  TERRAIN_AMPLITUDE,
+  TERRAIN_GLSL,
+  TERRAIN_SCALE,
+  TERRAIN_VERSION,
+  biomeAt,
+  fbm as terrainFbm,
+  heightAt,
+  normalAt,
+  ridged,
+  slopeAt,
+} from './core/terrain.js';
+export { DEFAULT_REGION_SIZE, RegionMemory, RegionState, TRAIL_HALF_LIFE } from './core/regions.js';
 
 export {
   DEFAULT_CONFIG,
@@ -49,5 +64,21 @@ export {
   spawnMote,
   testbedOptions,
 } from './demo/testbed.js';
+export {
+  BIOME_NAMES,
+  DEFAULT_APPEARANCE,
+  DEFAULT_CONFIG as PANDORA_CONFIG,
+  EYE_HEIGHT,
+  Kind as PandoraKind,
+  SPECIES,
+  avatarHandle,
+  avatarState,
+  createPandora,
+  findLanding,
+  install as installPandora,
+  pandoraOptions,
+  regionContents,
+} from './demo/pandora.js';
 export { renderAscii, renderLegend } from './demo/renderers/ascii.js';
+export { renderAscii3d } from './demo/renderers/ascii3d.js';
 export { renderSemantic } from './demo/renderers/semantic.js';

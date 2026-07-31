@@ -39,6 +39,13 @@ export class World {
     this.rng = new Rng(this.seed);
     this.fields = new Map();
 
+    /**
+     * Authoritative state that is neither a component, a field, nor a graph
+     * edge — region memory, for instance. A store joins checkpoints, forks, and
+     * the state hash by implementing toJSON / load / digest.
+     */
+    this.stores = new Map();
+
     this.lineage = { parent: null, forkTick: null, label: options.label ?? 'root' };
     this.pending = [];
     this.commandHandlers = new Map();
@@ -71,6 +78,17 @@ export class World {
 
   addLaw(desc) {
     return this.laws.register(desc);
+  }
+
+  registerStore(name, store) {
+    this.stores.set(name, store);
+    return store;
+  }
+
+  store(name) {
+    const store = this.stores.get(name);
+    if (!store) throw new Error(`unknown store "${name}"`);
+    return store;
   }
 
   onCommand(operation, handler) {
@@ -194,6 +212,10 @@ export class World {
     const d = new Digest();
     d.str(this.universe).int(this.tick).int(this.rng.state).int(this.ecs.digest()).int(this.graph.digest());
     for (const name of [...this.fields.keys()].sort()) d.str(name).int(this.fields.get(name).digest());
+    for (const name of [...this.stores.keys()].sort()) {
+      const store = this.stores.get(name);
+      if (typeof store.digest === 'function') d.str(name).int(store.digest());
+    }
     return d.hex;
   }
 
@@ -202,7 +224,10 @@ export class World {
   checkpoint() {
     const fields = {};
     for (const [name, field] of this.fields) fields[name] = field.toJSON();
+    const stores = {};
+    for (const [name, store] of this.stores) stores[name] = store.toJSON();
     return {
+      stores,
       version: CHECKPOINT_VERSION,
       universe: this.universe,
       label: this.lineage.label,
@@ -236,6 +261,11 @@ export class World {
       const field = this.fields.get(name);
       if (!field) throw new Error(`checkpoint has field "${name}" this world does not define`);
       field.data.set(json.data);
+    }
+    for (const [name, json] of Object.entries(checkpoint.stores ?? {})) {
+      const store = this.stores.get(name);
+      if (!store) throw new Error(`checkpoint has store "${name}" this world does not define`);
+      store.load(json);
     }
     this.log.seq = checkpoint.log.seq;
     this.log.digest = checkpoint.log.digest;

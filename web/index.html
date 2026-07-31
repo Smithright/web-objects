@@ -26,7 +26,7 @@
       <a href="#runtime">Runtime</a>
       <a href="#rendering">Rendering</a>
       <a href="#roadmap">Roadmap</a>
-      <a href="demo.html">Live world →</a>
+      <a href="world.html">Walk Pandora →</a>
     </nav>
     <button id="themeToggle" class="icon-button" type="button" aria-label="Toggle color theme">◐</button>
   </header>
@@ -40,7 +40,7 @@
           Latticeborn is an open-source engine for persistent, distributed worlds. It stores reality as a temporal graph of identities, fields, relationships, laws, and events—then lets games, simulations, agents, browsers, VR systems, and scientific tools render their own views.
         </p>
         <div class="hero-actions">
-          <a class="button primary" href="demo.html">Run a live world</a>
+          <a class="button primary" href="world.html">Walk a live world</a>
           <a class="button secondary" href="#architecture">Explore the architecture</a>
           <button class="button secondary" id="copyManifesto" type="button">Copy manifesto</button>
         </div>
@@ -467,19 +467,20 @@ final_chunk = apply_mutation_log(chunk, local_events)</code></pre>
           projection layer with interest management and priority tiers.
         </p>
         <div class="three-column">
-          <article><h3>Live world</h3><p>A browser client that renders the same universe as pixels, as text, and as an agent's affordances — <a href="demo.html">open the demo</a>.</p></article>
-          <article><h3>Terminal client</h3><p><code>latticeborn demo</code> renders the world as ASCII; <code>latticeborn inspect</code> renders one entity with no pixels at all.</p></article>
-          <article><h3>Proofs, not claims</h3><p><code>latticeborn verify</code> demonstrates determinism, replay, rollback, branching, log integrity, and sandbox containment.</p></article>
+          <article><h3>Pandora</h3><p>A ray-traced, procedurally remembered world you walk with keyboard, mouse, or a controller — <a href="world.html">enter it</a>. Regions you witness start keeping a history, and the mountain on the horizon is a term in the height function, not a file.</p></article>
+          <article><h3>The Grove</h3><p>A dense agent simulation showing scheduling, projection, branching, and the capability sandbox — <a href="demo.html">open it</a>.</p></article>
+          <article><h3>Proofs, not claims</h3><p><code>latticeborn verify</code> demonstrates determinism, replay, rollback, branching, log integrity, and sandbox containment. <a href="parity.html">parity.html</a> checks the shader and the simulation agree on the ground.</p></article>
         </div>
-        <pre><code>npm test                  <span class="kw"># 48 checks across the substrate and runtime</span>
-node bin/latticeborn.js verify
-node bin/latticeborn.js demo
-npm run serve             <span class="kw"># publication + live world at localhost:8080</span></code></pre>
+        <pre><code>npm test                  <span class="kw"># 66 checks across the substrate, runtime, and world</span>
+node bin/latticeborn.js walk     <span class="kw"># Pandora, ray-marched into your terminal</span>
+node bin/latticeborn.js verify   <span class="kw"># determinism, replay, rollback, branching</span>
+npm run serve             <span class="kw"># the world, the grove, and this page at localhost:8080</span></code></pre>
         <div class="callout">
           <span class="callout-label">Scope</span>
-          <p><strong>This is the spine, not the skin.</strong> The reference core is JavaScript so it can run unmodified
-          in a terminal and a browser. The C17 ABI, Rust services, Jolt integration, NATS fabric, and the O3DE, Godot,
-          and WebGPU clients described above remain Phase 2 and beyond.</p>
+          <p><strong>This is the spine, not the skin.</strong> The reference core is JavaScript so one implementation
+          runs unmodified in a terminal and a browser, and the ray tracer is a WebGL2 fragment shader rather than
+          hardware RT. The C17 ABI, Rust services, Jolt integration, NATS fabric, and the O3DE, Godot, and WebGPU
+          clients described above remain Phase 2 and beyond.</p>
         </div>
       </div>
     </section>

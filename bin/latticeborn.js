@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Latticeborn — terminal client.
 //
-//   latticeborn demo      run the reference world and render it as text
+//   latticeborn walk      traverse Pandora, ray-marched into the terminal
+//   latticeborn demo      run the Grove reference world and render it as text
 //   latticeborn verify    prove determinism, replay, branching, and sandboxing
 //   latticeborn bench     measure the substrate
 //   latticeborn chunk     regenerate procedural terrain from causes alone
@@ -23,9 +24,13 @@ import {
   testbedOptions,
 } from '../src/index.js';
 import { COUNTERFACTUAL, SCRIPT, driveScript } from '../src/demo/scenario.js';
+import { BIOME_NAMES, avatarState, createPandora } from '../src/demo/pandora.js';
+import { buildCamera } from '../src/demo/renderers/raymarch.js';
+import { renderAscii3d } from '../src/demo/renderers/ascii3d.js';
+import { heightAt } from '../src/core/terrain.js';
 
 const args = parseArgs(process.argv.slice(2));
-const command = args._[0] ?? 'demo';
+const command = args._[0] ?? 'walk';
 const useColor = args.color !== false && process.stdout.isTTY !== false && !args['no-color'];
 
 const C = {
@@ -44,10 +49,96 @@ function paint(s, code) {
 
 const BIOME_GLYPHS = { ocean: ['~', 25], shore: ['.', 179], grass: ['"', 71], forest: ['♠', 29], steppe: [';', 143], desert: ['·', 222], rock: ['^', 246], snow: ['*', 255] };
 
-const commands = { demo, verify, bench, chunk, inspect, help };
+const commands = { walk, demo, verify, bench, chunk, inspect, help };
 await (commands[command] ?? help)();
 
 // ---------------------------------------------------------------------------
+
+/**
+ * Pandora, in a terminal.
+ *
+ * The same height field the GPU shader marches, marched here into characters.
+ * Nothing about the world changes to accommodate the display — which is the
+ * only way to find out whether that was ever true.
+ */
+async function walk() {
+  const seed = args.seed ? Number(args.seed) : undefined;
+  const world = createPandora(seed === undefined ? {} : { seed });
+  const frames = Number(args.frames ?? 60);
+  const perFrame = Number(args.step ?? 10);
+  const animate = args.animate !== false && process.stdout.isTTY && !args.plain;
+  const width = Number(args.width ?? 100);
+  const height = Number(args.height ?? 28);
+
+  header(`PANDORA — seed ${world.seed}, ray-marched into ${width}x${height} characters`);
+  const started = Date.now();
+  let bearing = Number(args.bearing ?? 0.7);
+  let renderMs = 0;
+
+  for (let frame = 0; frame < frames; frame++) {
+    for (let i = 0; i < perFrame; i++) {
+      const here = avatarState(world);
+      // A walker with exactly one instinct: do not drown.
+      if (here.ground < 1.5) bearing += 0.09;
+      world.submit({
+        op: 'avatar.intent',
+        actor: 'walker',
+        payload: { forward: 1, yaw: bearing, sprint: frame % 7 === 3 },
+      });
+      world.step();
+    }
+
+    const state = avatarState(world);
+    const camera = buildCamera(state, { distance: 8, groundAt: (x, z) => heightAt(x, z, world.seed) });
+    const renderStarted = Date.now();
+    const canvas = renderAscii3d(world, camera, { width, height, color: useColor, steps: Number(args.steps ?? 72) });
+    renderMs = Date.now() - renderStarted;
+
+    const totals = world.store('regions').totals();
+    const lines = [
+      canvas,
+      `  ${C.dim('tick')} ${String(world.tick).padStart(5)}  ${C.dim('at')} ${String(Math.round(state.position.x)).padStart(5)},${String(Math.round(state.position.z)).padStart(5)}  ` +
+        `${C.dim('biome')} ${C.green(BIOME_NAMES[state.biome].padEnd(9))} ${C.dim('walked')} ${String(Math.round(state.distance)).padStart(4)}m  ${C.dim('hash')} ${C.violet(world.hash())}`,
+      `  ${C.dim('regions')} ${C.cyan(String(totals.resident))} resident · ${C.violet(String(totals.remembered))} remembered · ` +
+        `${totals.mutations} marks in ${(totals.bytesRemembered / 1024).toFixed(1)} KiB ` +
+        `${C.dim(`(as state: ${(totals.bytesIfMaterialized / 1048576).toFixed(1)} MiB)`)}`,
+      `  ${C.dim('entities')} ${String(world.ecs.entityCount).padStart(4)} live · ${C.dim('render')} ${renderMs}ms/frame`,
+    ];
+
+    if (animate) {
+      process.stdout.write('\u001b[H\u001b[2J' + lines.join('\n'));
+    } else if (frame === frames - 1 || frame % Math.ceil(frames / 3) === 0) {
+      console.log(lines.join('\n'));
+      console.log('');
+    }
+  }
+
+  const elapsed = (Date.now() - started) / 1000;
+  const state = avatarState(world);
+  const memory = world.store('regions');
+  const totals = memory.totals();
+  const home = memory.coordOf(state.position.x, state.position.z);
+  const region = memory.get(home.cx, home.cy);
+
+  console.log('');
+  header('WHAT THIS PLACE NOW REMEMBERS');
+  row('region', `${home.cx}, ${home.cy} — ${memory.stateOf(home.cx, home.cy)}`);
+  if (region) {
+    row('first witnessed', `tick ${region.firstObserved}`);
+    row('visits', String(region.observations));
+    row('footfalls', String(region.summary.trail));
+    row('first contacts', String(region.summary.blooms));
+  }
+  row('regions known', `${totals.known} (${totals.resident} resident, ${totals.remembered} remembered)`);
+  row('history', `${totals.mutations} marks · ${(totals.bytesRemembered / 1024).toFixed(1)} KiB stored`);
+  row('as state', `${(totals.bytesIfMaterialized / 1048576).toFixed(1)} MiB, had these regions been kept as data`);
+  row('simulated', `${world.tick} ticks in ${elapsed.toFixed(1)}s wall clock`);
+  row('state hash', C.violet(world.hash()));
+  console.log('');
+  console.log(C.dim('  Every ridge above was regenerated from one seed and a coordinate. Nothing was'));
+  console.log(C.dim('  stored except what happened, and only where somebody was there to see it.'));
+  console.log(C.dim('  Open web/world.html for the same world with secondary rays and a controller.'));
+}
 
 async function demo() {
   const frames = Number(args.frames ?? 90);
@@ -378,8 +469,13 @@ async function help() {
   console.log(`
 ${C.bold('latticeborn')} — an open reality engine
 
+  ${C.cyan('walk')}     [--frames N] [--step N] [--width N] [--height N] [--seed N] [--plain]
+           (default) Traverse Pandora — the ray-marched, procedurally
+           remembered world — rendered into characters from the same height
+           field the GPU shader compiles.
+
   ${C.cyan('demo')}     [--frames N] [--step N] [--width N] [--height N] [--wide] [--plain] [--fps N]
-           Run the reference world and render it in the terminal.
+           Run the Grove reference world and render it in the terminal.
 
   ${C.cyan('verify')}   [--ticks N] [--seed N]
            Prove determinism, replay, rollback, branching, log integrity,

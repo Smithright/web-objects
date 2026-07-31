@@ -578,6 +578,7 @@ function updatePanel(state, stats, totals) {
     ['ambient occlusion', settings.ao ? `${settings.ao} taps` : 'off'],
     ['reflection', settings.reflection ? 'water, one bounce' : 'off'],
     ['volumetric shafts', settings.godRays ? `${settings.godRays} samples` : 'off'],
+    ['key light', settings.sun ? `${(settings.sun * 114.6).toFixed(1)}° disc, sampled` : 'point source'],
     ['bloom', settings.bloom ? `${settings.hdr ? 'HDR' : 'LDR'} 4-tap + gaussian` : 'off'],
     ['clouds', settings.clouds ? 'cloud deck' : 'off'],
     ['temporal accumulation', settings.taa ? (stats.accumulated ? 'reprojecting' : 'warming up') : 'off'],

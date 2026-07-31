@@ -41,23 +41,23 @@ export const MAX_MARKS = 48;
 export const QUALITY = {
   low: {
     scale: 0.4, steps: 96, shadowSteps: 12, reflection: 0, ao: 0,
-    lights: 20, marks: 16, islands: 0, clouds: 0, godRays: 0, bloom: 0, bloomPasses: 0, taa: 0,
+    lights: 20, marks: 16, islands: 0, clouds: 0, godRays: 0, bloom: 0, bloomPasses: 0, taa: 0, sun: 0,
   },
   medium: {
     scale: 0.6, steps: 150, shadowSteps: 18, reflection: 1, ao: 4,
-    lights: 32, marks: 28, islands: 1, clouds: 1, godRays: 0, bloom: 1, bloomPasses: 2, taa: 1,
+    lights: 32, marks: 28, islands: 1, clouds: 1, godRays: 0, bloom: 1, bloomPasses: 2, taa: 1, sun: 0.020,
   },
   high: {
     scale: 0.85, steps: 220, shadowSteps: 26, reflection: 1, ao: 5,
-    lights: 48, marks: 48, islands: 1, clouds: 1, godRays: 12, bloom: 1, bloomPasses: 3, taa: 1,
+    lights: 48, marks: 48, islands: 1, clouds: 1, godRays: 12, bloom: 1, bloomPasses: 3, taa: 1, sun: 0.028,
   },
   ultra: {
     scale: 1, steps: 320, shadowSteps: 34, reflection: 1, ao: 6,
-    lights: 48, marks: 48, islands: 1, clouds: 1, godRays: 20, bloom: 1, bloomPasses: 4, taa: 1,
+    lights: 48, marks: 48, islands: 1, clouds: 1, godRays: 20, bloom: 1, bloomPasses: 4, taa: 1, sun: 0.034,
   },
   max: {
     scale: 1.35, steps: 420, shadowSteps: 44, reflection: 1, ao: 6,
-    lights: 48, marks: 48, islands: 1, clouds: 1, godRays: 28, bloom: 1, bloomPasses: 4, taa: 1,
+    lights: 48, marks: 48, islands: 1, clouds: 1, godRays: 28, bloom: 1, bloomPasses: 4, taa: 1, sun: 0.034,
   },
 };
 
@@ -105,6 +105,8 @@ uniform int uGodRays;
 uniform float uFar;
 uniform float uNear;
 uniform vec2 uJitter;   // sub-pixel offset, in NDC
+uniform int uFrame;       // frame counter, wrapped, for temporal dithering
+uniform float uSunRadius; // angular radius of the key light, radians
 
 uniform int uLightCount;
 uniform vec4 uLightPos[${MAX_LIGHTS}];
@@ -127,6 +129,12 @@ const float EYE_HEIGHT = ${EYE_HEIGHT.toFixed(2)};
 const vec3 KEY_DIR = vec3(-0.5698, 0.6243, 0.5346);
 const vec3 KEY_COLOR = vec3(0.44, 0.52, 0.86);
 const float CLOUD_BASE = 2600.0;
+const float AIR_SCALE_HEIGHT = 520.0;   // metres for the air to thin by 1/e
+const float AIR_EXTINCTION = 0.00030;   // per metre of air, at sea level
+// Shafts march the low mist rather than the bulk air: denser, and hugging the
+// ground much more tightly. Four times the extinction, five times the falloff.
+const float MIST_EXTINCTION = AIR_EXTINCTION * 4.0;
+const float MIST_FALLOFF = 0.010;
 
 vec3 hueToRgb(float h) {
   vec3 k = fract(vec3(h) + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0));
@@ -137,6 +145,38 @@ vec3 hueToRgb(float h) {
 float phaseHG(float cosTheta, float g) {
   float gg = g * g;
   return (1.0 - gg) / (12.566370614 * pow(1.0 + gg - 2.0 * g * cosTheta, 1.5));
+}
+
+/**
+ * Two decorrelated uniforms in [0,1) for this pixel, on this frame.
+ *
+ * Keyed to the frame counter rather than to the clock. A hash seeded on
+ * int(uTime * 60.0) repeats whenever the frame rate is not exactly sixty,
+ * which turns a dither meant to decorrelate across frames into a fixed
+ * pattern that the temporal accumulator then faithfully preserves.
+ */
+vec2 frameNoise(int salt) {
+  ivec2 fc = ivec2(mod(gl_FragCoord.xy, 2048.0));
+  int seed = uSeed + uFrame * 7919 + salt;
+  return vec2(hashUnit2(fc.x, fc.y, seed), hashUnit2(fc.x + 733, fc.y + 131, seed + 17));
+}
+
+/**
+ * A direction through a random point of the key light's disc.
+ *
+ * One shadow ray down the exact centre of a light gives a penumbra whose
+ * width is a property of the shading hack that produced it. Sampling the disc
+ * instead gives a penumbra that widens with the distance to the occluder,
+ * which is what a real one does — and costs nothing, because the temporal
+ * accumulator is already averaging sixteen frames.
+ */
+vec3 keyDirection(vec2 xi) {
+  if (uSunRadius <= 0.0) return KEY_DIR;
+  float angle = xi.x * 6.283185307;
+  float radius = sqrt(xi.y) * uSunRadius;
+  vec3 tangent = normalize(cross(KEY_DIR, vec3(0.0, 1.0, 0.0)));
+  vec3 bitangent = cross(KEY_DIR, tangent);
+  return normalize(KEY_DIR + (tangent * cos(angle) + bitangent * sin(angle)) * radius);
 }
 
 // --- sky -------------------------------------------------------------------
@@ -419,9 +459,15 @@ float ambientOcclusion(vec3 p, vec3 n) {
   if (uAO == 0) return 1.0;
   float occ = 0.0;
   float scale = 1.0;
+  // Offset the whole ladder of taps by a fraction of a step each frame. Fixed
+  // sample distances put visible rings around every boulder; the accumulator
+  // turns the offset ones into a gradient. uSunRadius is zero exactly when
+  // there is no accumulator to average them, and then the taps sit at the
+  // midpoint they always did.
+  float stagger = uSunRadius > 0.0 ? frameNoise(11).x : 0.5;
   for (int i = 1; i <= 6; i++) {
     if (i > uAO) break;
-    float d = 0.8 * float(i);
+    float d = 0.8 * (float(i) - 0.5 + stagger);
     vec3 q = p + n * d;
     occ += clamp(d - (q.y - heightAt(q.xz, uSeed)), 0.0, 1.0) * scale;
     scale *= 0.62;
@@ -472,7 +518,9 @@ vec3 markGlow(vec3 p) {
 
 vec3 lightSurface(vec3 p, vec3 n, vec3 albedo, int shadowSteps, float gloss, int firstLight) {
   float shade = max(0.0, dot(n, KEY_DIR));
-  if (shadowSteps > 0) shade *= terrainShadow(p, KEY_DIR, 520.0, shadowSteps);
+  // One ray, but through a different point of the light's disc every frame:
+  // the penumbra comes out of the accumulator rather than out of a constant.
+  if (shadowSteps > 0) shade *= terrainShadow(p, keyDirection(frameNoise(3)), 520.0, shadowSteps);
   vec3 key = KEY_COLOR * shade * 0.42;
   vec3 ambient = mix(vec3(0.024, 0.036, 0.062), vec3(0.038, 0.055, 0.090), n.y * 0.5 + 0.5);
   vec3 color = albedo * (key + ambient * ambientOcclusion(p, n));
@@ -526,29 +574,72 @@ vec3 godRays(vec3 ro, vec3 rd, float tMax, float dither) {
   float far = min(tMax, 620.0);
   float stride = far / float(samples);
   float phase = phaseHG(dot(rd, KEY_DIR), 0.62);
+  vec3 toLight = keyDirection(frameNoise(23));
   vec3 sum = vec3(0.0);
+  float transmittance = 1.0;
+  // Start the march at a jittered fraction of a stride so the sample planes
+  // do not line up into bands across the shaft.
   float t = stride * (0.35 + dither * 0.65);
   for (int i = 0; i < 32; i++) {
     if (i >= samples || t > far) break;
     vec3 p = ro + rd * t;
-    float lit = terrainShadow(p, KEY_DIR, 300.0, 10);
-    float density = exp(-max(0.0, p.y - SEA_LEVEL) * 0.010) * 0.020;
-    sum += KEY_COLOR * lit * density * phase * stride;
+    float lit = terrainShadow(p, toLight, 300.0, 10);
+    float density = MIST_EXTINCTION * exp(-max(0.0, p.y - SEA_LEVEL) * MIST_FALLOFF);
+    // Integrate the segment exactly rather than by the rectangle rule.
+    //
+    // A plain sum of density * stride grows without bound: at the density this
+    // used to assume it reached twelve over 620 metres, and twelve times a
+    // phase function that never quite goes to zero is a white wash over the
+    // whole sky rather than a shaft. Even one step of it could exceed unity,
+    // which is why the twelve-sample preset looked *hazier* than the
+    // twenty-eight-sample one — coarser steps overshot harder. The closed form
+    // over a segment of constant density is 1 - exp(-density * stride), which
+    // is bounded, and which makes every preset agree about the air.
+    float segment = 1.0 - exp(-density * stride);
+    // 0.42 is the same coefficient the surfaces scale the key light by. The
+    // air and the ground have to be lit by the same lamp.
+    sum += KEY_COLOR * 0.42 * lit * phase * segment * transmittance;
+    transmittance *= 1.0 - segment;
     t += stride;
   }
   return sum;
 }
 
-/** Aerial perspective: distance turns the world the colour of the air. */
-vec3 applyFog(vec3 color, float dist, vec3 rd, vec3 p) {
-  // Air thins with altitude, so the optical depth is integrated against the
-  // height of the thing being looked at, not just the distance to it.
-  float lowLying = exp(-max(0.0, p.y - SEA_LEVEL) * 0.0022);
-  float density = 1.0 - exp(-dist * 0.00042 * (0.35 + lowLying * 0.65));
-  vec3 fogColor = mix(vec3(0.026, 0.046, 0.082), vec3(0.048, 0.076, 0.106), lowLying);
-  // Scattering peaks looking toward the light, as it does in real air.
-  fogColor += KEY_COLOR * pow(max(0.0, dot(rd, KEY_DIR)), 6.0) * 0.20;
-  return mix(color, fogColor, clamp(density, 0.0, 0.88));
+/**
+ * Optical depth through an exponential atmosphere, in closed form.
+ *
+ * Density along the ray is exp(-(y0 + rd.y * t) / H), and the integral of that
+ * from 0 to d is (H / rd.y) * (exp(-y0/H) - exp(-y1/H)). The usual shortcut is
+ * to evaluate the density once, at whichever end of the ray is convenient,
+ * which makes a mountain peak exactly as hazy as the valley floor it stands
+ * in. The gradient from a hazy base to a clear summit is most of what tells
+ * you the mountain is four kilometres away and 1.4 km tall rather than a
+ * hillock a hundred metres off.
+ *
+ * Heights are clamped at sea level: below it the ray is underwater, which has
+ * its own extinction and is not this function's problem.
+ */
+float airDepth(vec3 ro, vec3 rd, float dist) {
+  float y0 = max(0.0, ro.y - SEA_LEVEL);
+  float y1 = max(0.0, ro.y + rd.y * dist - SEA_LEVEL);
+  if (abs(rd.y) < 1e-4) return dist * exp(-y0 / AIR_SCALE_HEIGHT);
+  return (AIR_SCALE_HEIGHT / rd.y) * (exp(-y0 / AIR_SCALE_HEIGHT) - exp(-y1 / AIR_SCALE_HEIGHT));
+}
+
+/**
+ * Aerial perspective: distance turns the world the colour of the air.
+ *
+ * The in-scattered light is the sky in the direction being looked at, so a
+ * ridge dissolving into the horizon dissolves into the *right* colour instead
+ * of into a grey that only agrees with the sky by luck. On top of that sits a
+ * Henyey-Greenstein lobe toward the key light, which is why the air brightens
+ * when you look into it.
+ */
+vec3 applyFog(vec3 color, float dist, vec3 ro, vec3 rd) {
+  float transmittance = exp(-AIR_EXTINCTION * airDepth(ro, rd, dist));
+  vec3 inscatter = skyGradient(rd) * 0.80 + vec3(0.010, 0.018, 0.032);
+  inscatter += KEY_COLOR * phaseHG(dot(rd, KEY_DIR), 0.58) * 0.28;
+  return color * transmittance + inscatter * (1.0 - transmittance);
 }
 
 vec3 shadeReflection(vec3 ro, vec3 rd) {
@@ -560,7 +651,7 @@ vec3 shadeReflection(vec3 ro, vec3 rd) {
   vec3 n = normalAt(p.xz, uSeed, max(0.5, t * 0.006));
   float snow;
   vec3 color = lightSurface(p, n, groundAlbedo(p, n, snow), 0, snow * 0.35, 0) + lightHaze(ro, rd, t) * 0.6;
-  return applyFog(color, t, rd, p);
+  return applyFog(color, t, ro, rd);
 }
 
 vec3 shadeWater(vec3 p, vec3 rd) {
@@ -679,7 +770,7 @@ vec3 shadeScene(vec3 ro, vec3 rd, float dither, out float hitDistance) {
   }
 
   hitDistance = dist;
-  color = applyFog(color, dist, rd, hitPoint);
+  color = applyFog(color, dist, ro, rd);
   return color + lightHaze(ro, rd, dist) + godRays(ro, rd, dist, dither);
 }
 
@@ -689,8 +780,7 @@ void main() {
   vec2 ndc = (vUv * 2.0 - 1.0) + uJitter;
   vec2 uv = ndc * vec2(uResolution.x / uResolution.y, 1.0);
   vec3 rd = normalize(uCamBasis * vec3(uv * uFov, 1.0));
-  vec2 fc = mod(gl_FragCoord.xy, 2048.0);
-  float dither = hashUnit2(int(fc.x), int(fc.y), uSeed + int(uTime * 60.0));
+  float dither = frameNoise(0).x;
   float hitDistance;
   fragColor = vec4(shadeScene(uCamPos, rd, dither, hitDistance), 1.0);
 
@@ -1009,6 +1099,7 @@ export function createRaymarchRenderer(canvas, options = {}) {
   const scene = link(gl, SCENE_SHADER, [
     'uResolution', 'uTime', 'uSeed', 'uCamPos', 'uCamBasis', 'uFov',
     'uSteps', 'uShadowSteps', 'uReflection', 'uAO', 'uIslands', 'uClouds', 'uGodRays', 'uFar', 'uNear', 'uJitter',
+    'uFrame', 'uSunRadius',
     'uLightCount', 'uLightPos', 'uLightColor', 'uMarkCount', 'uMarks',
     'uAvatarPos', 'uAvatarYaw', 'uAvatarPhase', 'uAvatarSpeed', 'uAvatarVisible',
     'uAppearance', 'uAppearance2',
@@ -1322,6 +1413,13 @@ export function createRaymarchRenderer(canvas, options = {}) {
     const jitterX = taaOn ? sample[0] / state.width : 0;
     const jitterY = taaOn ? sample[1] / state.height : 0;
     gl.uniform2f(u.uJitter, jitterX, jitterY);
+    // Wrapped: the shader multiplies this by a prime to build a hash seed, and
+    // an unwrapped counter overflows a GLSL int inside an hour of play.
+    gl.uniform1i(u.uFrame, frameIndex % 4096);
+    // A stochastic light disc is only affordable because the accumulator
+    // averages it. Without accumulation the same sampling is just noise, so
+    // the shadow ray goes down the centre of the light instead.
+    gl.uniform1f(u.uSunRadius, taaOn ? setting('sun') ?? 0 : 0);
 
     const lightCount = gatherLights(world, camera);
     gl.uniform1i(u.uLightCount, lightCount);
@@ -1613,6 +1711,7 @@ export function createRaymarchRenderer(canvas, options = {}) {
         bloom: setting('bloom'),
         lights: setting('lights'),
         taa: setting('taa'),
+        sun: setting('sun') ?? 0,
         scale: renderScale,
         hdr: Boolean(hdr),
       };

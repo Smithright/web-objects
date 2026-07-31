@@ -99,6 +99,38 @@ across the new one.
 
 It is on from `medium` up, off on `low`, and there is a checkbox.
 
+**The accumulator is a sample budget.** Once sixteen frames are being averaged,
+anything that used to need sixteen taps in one frame can take one tap per frame
+instead. The key light stopped being a point and became a disc a few degrees
+across, sampled at a different spot every frame, so its penumbra widens with the
+distance to whatever is casting it rather than being a constant of the shading
+hack that produced it. Ambient-occlusion taps stagger along their ray by a
+random fraction of a step, which is what removes the rings that fixed sample
+distances draw around every boulder. All of it is keyed to a frame counter
+rather than to `int(uTime * 60.0)` — a clock-derived hash repeats whenever the
+frame rate is not exactly sixty, and a dither that repeats is a pattern the
+accumulator will faithfully preserve.
+
+**Aerial perspective.** Air thins exponentially with height, so the optical
+depth along a ray has a closed form: `(H / rd.y) * (exp(-y0/H) - exp(-y1/H))`.
+Evaluating the density once instead — at whichever end of the ray is convenient
+— makes a mountain peak exactly as hazy as the valley floor it stands in, and
+the gradient from hazy base to clear summit is most of what tells you the thing
+is four kilometres away and 1.4 km tall rather than a hillock a hundred metres
+off. What gets mixed in is the sky in that direction plus a Henyey-Greenstein
+lobe toward the key light, so a ridge dissolving into the horizon dissolves into
+the right colour rather than into a grey that agrees with the sky by luck.
+
+The volumetric shafts integrate the same air, exactly rather than by the
+rectangle rule. `sum += density * stride` grows without bound, and at the
+density the shafts used to assume it reached twelve over 620 metres — twelve
+times a phase function that never quite goes to zero is a white wash over the
+whole sky. A single step could exceed unity, which is why the twelve-sample
+preset came out *hazier* than the twenty-eight-sample one: coarser steps
+overshot harder. `1 - exp(-density * stride)` is the closed form of the same
+integral, it is bounded, and every preset now agrees about what the air looks
+like.
+
 **Performance.** Render targets are sized in *device* pixels, so on a Retina
 display "100%" means native rather than the quarter-resolution a CSS-pixel
 renderer quietly gives you. The adapter string picks a starting preset — Apple

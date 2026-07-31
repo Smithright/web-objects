@@ -56,10 +56,20 @@ export const QUALITY = {
     lights: 48, marks: 48, islands: 1, clouds: 1, godRays: 20, bloom: 1, bloomPasses: 4,
   },
   max: {
-    scale: 1.7, steps: 420, shadowSteps: 44, reflection: 1, ao: 6,
+    scale: 1.35, steps: 420, shadowSteps: 44, reflection: 1, ao: 6,
     lights: 48, marks: 48, islands: 1, clouds: 1, godRays: 28, bloom: 1, bloomPasses: 4,
   },
 };
+
+/**
+ * A ceiling on how many rays a frame may cast, whatever the settings say.
+ *
+ * `scale` multiplies *device* pixels, so `max` on a Retina display asks for
+ * 1.35 x 2 in each axis — seven times the pixels of the same setting on a 1x
+ * screen. Without a cap, picking the top preset on a good laptop configures a
+ * slideshow and blames the GPU.
+ */
+export const MAX_PRIMARY_RAYS = 12e6;
 
 const FULLSCREEN_VERTEX = `#version 300 es
 precision highp float;
@@ -688,8 +698,12 @@ void main() {
   gl_FragDepth = clamp(ndc * 0.5 + 0.5, 0.0, 1.0);
 }`;
 
+// The post passes run at half precision. Their inputs are display-range
+// colour, not world coordinates, and Apple and Adreno GPUs execute fp16 at
+// twice the rate — this is free performance for anything that does not need
+// the range.
 const BRIGHT_SHADER = `#version 300 es
-precision highp float;
+precision mediump float;
 in vec2 vUv;
 out vec4 fragColor;
 uniform sampler2D uScene;
@@ -708,7 +722,7 @@ void main() {
 }`;
 
 const BLUR_SHADER = `#version 300 es
-precision highp float;
+precision mediump float;
 in vec2 vUv;
 out vec4 fragColor;
 uniform sampler2D uSource;
@@ -815,6 +829,11 @@ export function createRaymarchRenderer(canvas, options = {}) {
   // white is clipped before the bright pass ever sees it.
   const hdr = gl.getExtension('EXT_color_buffer_float');
   const linearFloat = gl.getExtension('OES_texture_float_linear');
+  // Without this, "ms per frame" measures how long it took to *submit* the
+  // work, which on a fast GPU is a number that means nothing at all.
+  const timer = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+  const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+  const adapter = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
   const internalFormat = hdr ? gl.RGBA16F : gl.RGBA8;
   const textureType = hdr ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
 
@@ -842,7 +861,17 @@ export function createRaymarchRenderer(canvas, options = {}) {
   let qualityName = options.quality ?? 'medium';
   let renderScale = quality.scale;
   const overrides = {}; // per-feature user overrides, applied over the preset
-  const state = { width: 0, height: 0, frames: 0, lastMs: 0, avgMs: 16 };
+  // Render targets are sized in *device* pixels. On a Retina display CSS
+  // pixels are half of them, so a renderer that ignores this quietly runs at
+  // quarter resolution and blames the GPU.
+  let pixelRatio = options.pixelRatio ?? (typeof devicePixelRatio === 'number' ? devicePixelRatio : 1);
+  const state = {
+    width: 0, height: 0, frames: 0,
+    lastMs: 0, avgMs: 16,       // CPU: time spent submitting
+    gpuMs: 0, gpuAvgMs: 0,      // GPU: time spent drawing, when measurable
+    cssWidth: 0, cssHeight: 0,
+  };
+  const pendingQueries = [];
 
   const targets = { scene: null, bloomA: null, bloomB: null };
   let sceneDepth = null;
@@ -879,8 +908,18 @@ export function createRaymarchRenderer(canvas, options = {}) {
   }
 
   function resize(cssWidth, cssHeight) {
-    const width = Math.max(64, Math.round(cssWidth * renderScale));
-    const height = Math.max(64, Math.round(cssHeight * renderScale));
+    state.cssWidth = cssWidth;
+    state.cssHeight = cssHeight;
+    let effective = renderScale * pixelRatio;
+    const requested = cssWidth * cssHeight * effective * effective;
+    if (requested > MAX_PRIMARY_RAYS) {
+      effective *= Math.sqrt(MAX_PRIMARY_RAYS / requested);
+      state.capped = true;
+    } else {
+      state.capped = false;
+    }
+    const width = Math.max(64, Math.round(cssWidth * effective));
+    const height = Math.max(64, Math.round(cssHeight * effective));
     if (width === state.width && height === state.height) return;
     canvas.width = width;
     canvas.height = height;
@@ -924,6 +963,33 @@ export function createRaymarchRenderer(canvas, options = {}) {
   function setRenderScale(scale) {
     renderScale = Math.max(0.2, Math.min(2, scale));
     state.width = 0;
+  }
+
+  /**
+   * How many device pixels one CSS pixel is worth. 1 is "ignore Retina",
+   * devicePixelRatio is native. Anything in between is a legitimate trade.
+   */
+  function setPixelRatio(ratio) {
+    pixelRatio = Math.max(0.5, Math.min(3, ratio));
+    state.width = 0;
+  }
+
+  /** Collect finished GPU timer results. Queries land a frame or two late. */
+  function collectTimings() {
+    if (!timer) return;
+    while (pendingQueries.length) {
+      const query = pendingQueries[0];
+      const available = gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE);
+      const disjoint = gl.getParameter(timer.GPU_DISJOINT_EXT);
+      if (!available) break;
+      pendingQueries.shift();
+      if (!disjoint) {
+        const nanoseconds = gl.getQueryParameter(query, gl.QUERY_RESULT);
+        state.gpuMs = nanoseconds / 1e6;
+        state.gpuAvgMs = state.gpuAvgMs ? state.gpuAvgMs * 0.9 + state.gpuMs * 0.1 : state.gpuMs;
+      }
+      gl.deleteQuery(query);
+    }
   }
 
   /**
@@ -1018,6 +1084,13 @@ export function createRaymarchRenderer(canvas, options = {}) {
   function render(world, camera, frame = {}) {
     const started = performance.now();
     camera.avatar = frame.firstPerson ? null : frame.avatar;
+
+    collectTimings();
+    let query = null;
+    if (timer && pendingQueries.length < 3) {
+      query = gl.createQuery();
+      gl.beginQuery(timer.TIME_ELAPSED_EXT, query);
+    }
     gl.bindVertexArray(vao);
 
     // --- scene pass ---------------------------------------------------------
@@ -1133,6 +1206,11 @@ export function createRaymarchRenderer(canvas, options = {}) {
     gl.uniform2f(composite.uniforms.uResolution, state.width, state.height);
     drawTo(null);
 
+    if (query) {
+      gl.endQuery(timer.TIME_ELAPSED_EXT);
+      pendingQueries.push(query);
+    }
+
     const ms = performance.now() - started;
     state.frames++;
     state.lastMs = ms;
@@ -1148,6 +1226,9 @@ export function createRaymarchRenderer(canvas, options = {}) {
       hdr: Boolean(hdr),
       meshDraws: meshStats.draws,
       meshTriangles: meshStats.triangles,
+      gpuMs: state.gpuMs,
+      // Rays actually cast this frame, which is the number that scales.
+      primaryRays: state.width * state.height,
     };
   }
 
@@ -1254,6 +1335,19 @@ export function createRaymarchRenderer(canvas, options = {}) {
     setQuality,
     setOption,
     setRenderScale,
+    setPixelRatio,
+    adapter,
+    get pixelRatio() {
+      return pixelRatio;
+    },
+    get timing() {
+      return {
+        gpuMs: state.gpuMs,
+        gpuAvgMs: state.gpuAvgMs,
+        cpuMs: state.avgMs,
+        measured: Boolean(timer),
+      };
+    },
     get quality() {
       return qualityName;
     },
@@ -1272,7 +1366,7 @@ export function createRaymarchRenderer(canvas, options = {}) {
       };
     },
     get stats() {
-      return { ...state, renderScale, quality: qualityName };
+      return { ...state, renderScale, pixelRatio, quality: qualityName, adapter };
     },
     dispose() {
       for (const key of Object.keys(targets)) disposeTarget(targets[key]);

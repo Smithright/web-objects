@@ -427,12 +427,17 @@ function handleBuildKey(event) {
 function tuneResolution() {
   const current = renderer.stats.renderScale;
   const ceiling = QUALITY[renderer.quality].scale;
-  if (perf.frameMs > 26) {
+  // A measured GPU time is the honest signal. Frame time also contains the
+  // simulation, the compositor, and whatever else the machine is doing.
+  const timing = renderer.timing;
+  const budget = timing.measured && timing.gpuAvgMs > 0 ? timing.gpuAvgMs : perf.frameMs;
+  perf.budgetMs = budget;
+  if (budget > 26) {
     // Shed resolution in proportion to how far over budget we are, so a very
     // slow device converges in a few frames instead of a few hundred.
-    const overshoot = Math.min(0.35, (perf.frameMs - 26) / 400);
+    const overshoot = Math.min(0.35, (budget - 26) / 400);
     if (current > 0.25) renderer.setRenderScale(current - 0.03 - overshoot);
-  } else if (perf.frameMs < 15 && current < ceiling) {
+  } else if (budget < 15 && current < ceiling) {
     renderer.setRenderScale(Math.min(ceiling, current + 0.03));
   }
 }
@@ -518,13 +523,16 @@ function updateHud(state, stats) {
     ['travelled', `${state.distance.toFixed(0)} m`],
   ]);
 
+  const timing = renderer.timing;
+  const rays = (stats.primaryRays ?? stats.width * stats.height) * Math.max(1, perf.fps);
   kv(ui.hudPerf, [
     ['fps', { text: perf.fps.toFixed(0), cls: perf.fps > 45 ? 'good' : perf.fps > 24 ? '' : 'warn' }],
     ['frame', `${perf.frameMs.toFixed(1)} ms`],
+    [timing.measured ? 'gpu' : 'gpu (n/a)', timing.measured ? `${timing.gpuAvgMs.toFixed(2)} ms` : '—'],
     ['sim', `${perf.simMs.toFixed(2)} ms/tick`],
-    ['trace', `${stats.width}×${stats.height}`],
+    ['trace', `${stats.width}×${stats.height} @${renderer.pixelRatio.toFixed(1)}x`],
+    ['rays', `${(rays / 1e6).toFixed(1)}M/s`],
     ['lights', `${stats.lights} traced`],
-    ['marks', `${stats.marks} remembered`],
     ['entities', world.ecs.entityCount.toLocaleString()],
   ]);
 
@@ -565,7 +573,9 @@ function updatePanel(state, stats, totals) {
     ['bloom', settings.bloom ? `${settings.hdr ? 'HDR' : 'LDR'} 4-tap + gaussian` : 'off'],
     ['clouds', settings.clouds ? 'cloud deck' : 'off'],
     ['render scale', { text: `${(renderer.stats.renderScale * 100).toFixed(0)}%`, cls: renderer.stats.renderScale > 1 ? 'good' : '' }],
+    ['device pixels', `${renderer.pixelRatio.toFixed(2)}× of ${(devicePixelRatio || 1).toFixed(2)}×${renderer.stats.capped ? ' (capped)' : ''}`],
     ['resolution', `${stats.width}×${stats.height}`],
+    ['adapter', String(renderer.adapter ?? 'unknown').replace(/^ANGLE \(/, '').slice(0, 44)],
   ]);
 
   const selected = build.selection ?? build.target?.handle ?? null;
@@ -826,6 +836,11 @@ function start() {
     input.invertY = ui.chkInvert.checked;
   });
 
+  const pixelSlider = document.getElementById('rngPixelRatio');
+  pixelSlider.value = String(renderer.pixelRatio);
+  pixelSlider.addEventListener('input', () => renderer.setPixelRatio(Number(pixelSlider.value)));
+  document.getElementById('btnBenchmark').addEventListener('click', () => benchmark());
+
   // Individual graphics options, layered over whatever preset is selected.
   const toggle = (element, option, on) =>
     element.addEventListener('change', () => renderer.setOption(option, element.checked ? on : 0));
@@ -875,6 +890,20 @@ function start() {
     banner(`new world · seed ${world.seed}`);
   });
 
+  // Pick a starting preset from what the adapter says it is. Apple Silicon or
+  // a discrete GPU has no business starting on `medium`, and a software
+  // rasterizer has no business starting anywhere else but `low`.
+  const adapter = String(renderer.adapter ?? '');
+  const strong = /apple m\d|apple gpu|metal renderer|radeon (r[7-9]|rx)|geforce|nvidia|arc a\d/i.test(adapter);
+  const software = /swiftshader|llvmpipe|software|basic render/i.test(adapter);
+  if (software) {
+    setQuality('low');
+    renderer.setPixelRatio(1);
+  } else if (strong) {
+    setQuality('ultra');
+    renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
+  }
+
   syncOptionChecks();
   const settings = renderer.settings();
   // Drag any .vrm/.glb onto the window to wear it.
@@ -892,7 +921,10 @@ function start() {
     loadDefaultAvatar();
   });
 
-  ui.gateWebgl.textContent = `WebGL2 ready${settings.hdr ? ' · HDR bloom' : ''} — quality presets up to max. Drag a .vrm or .glb in to wear it.`;
+  const shortName = adapter.replace(/^ANGLE \(|\)$/g, '').split(',')[1]?.trim() || adapter.slice(0, 46) || 'WebGL2';
+  ui.gateWebgl.textContent =
+    `${shortName}${settings.hdr ? ' · HDR' : ''}${renderer.timing.measured ? ' · GPU timing' : ''} — ` +
+    `starting on ${renderer.quality} at ${renderer.pixelRatio.toFixed(1)}× device pixels. Drag a .vrm or .glb in to wear it.`;
   requestAnimationFrame(frame);
 }
 
@@ -925,7 +957,80 @@ function escapeHtml(text) {
 
 // Exposed for the headless smoke test, which drives the same code path a
 // player does rather than a special one.
+/**
+ * Sweep the presets and measure each one.
+ *
+ * Reports GPU time where the browser exposes a timer and frame time otherwise,
+ * plus rays per second — the number that actually scales with the hardware.
+ * Run it and the answer stops being a guess.
+ */
+async function benchmark(options = {}) {
+  const presets = options.presets ?? ['low', 'medium', 'high', 'ultra', 'max'];
+  const warmup = options.warmup ?? 30;
+  const frames = options.frames ?? 90;
+  const wasAdaptive = adaptive;
+  const wasQuality = renderer.quality;
+  adaptive = false;
+  const results = [];
+  banner('benchmarking…');
+
+  for (const preset of presets) {
+    setQuality(preset);
+    renderer.setRenderScale(QUALITY[preset].scale);
+    await waitFrames(warmup);
+
+    const samples = [];
+    const gpu = [];
+    for (let i = 0; i < frames; i++) {
+      const before = performance.now();
+      await waitFrames(1);
+      samples.push(performance.now() - before);
+      if (renderer.timing.measured && renderer.timing.gpuMs > 0) gpu.push(renderer.timing.gpuMs);
+    }
+    samples.sort((a, b) => a - b);
+    gpu.sort((a, b) => a - b);
+    const stats = renderer.stats;
+    const median = samples[Math.floor(samples.length / 2)];
+    results.push({
+      preset,
+      resolution: `${stats.width}×${stats.height}`,
+      pixels: stats.width * stats.height,
+      medianFrameMs: +median.toFixed(2),
+      p95FrameMs: +samples[Math.floor(samples.length * 0.95)].toFixed(2),
+      medianGpuMs: gpu.length ? +gpu[Math.floor(gpu.length / 2)].toFixed(2) : null,
+      fps: +(1000 / median).toFixed(1),
+      raysPerSecond: Math.round((stats.width * stats.height * 1000) / median),
+    });
+  }
+
+  adaptive = wasAdaptive;
+  setQuality(wasQuality);
+
+  const table = results
+    .map(
+      (r) =>
+        `${r.preset.padEnd(7)} ${r.resolution.padEnd(12)} ${String(r.fps).padStart(6)} fps  ` +
+        `${String(r.medianFrameMs).padStart(6)} ms frame  ` +
+        `${(r.medianGpuMs === null ? '     —' : String(r.medianGpuMs).padStart(6))} ms gpu  ` +
+        `${(r.raysPerSecond / 1e6).toFixed(1).padStart(6)} Mrays/s`,
+    )
+    .join('\n');
+  const report = `adapter: ${renderer.adapter}\ndevice pixel ratio: ${renderer.pixelRatio}\n\n${table}`;
+  console.log(report);
+  banner('benchmark complete — see the console');
+  return { adapter: renderer.adapter, pixelRatio: renderer.pixelRatio, results, report };
+}
+
+function waitFrames(count) {
+  return new Promise((resolve) => {
+    let remaining = count;
+    const tick = () => (--remaining <= 0 ? resolve() : requestAnimationFrame(tick));
+    requestAnimationFrame(tick);
+  });
+}
+
 window.latticeborn = {
+  benchmark,
   build,
   toggleBuild,
   spawnAhead: () => spawnAhead(avatarState(world)),

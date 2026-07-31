@@ -76,6 +76,25 @@ toggled individually. Resolution adapts to hold the frame budget.
 It is real-time ray *marching* (sphere tracing) with secondary rays, not
 hardware RTX.
 
+**Performance.** Render targets are sized in *device* pixels, so on a Retina
+display "100%" means native rather than the quarter-resolution a CSS-pixel
+renderer quietly gives you. The adapter string picks a starting preset — Apple
+Silicon and discrete GPUs start on `ultra` at native pixels, a software
+rasterizer starts on `low` — and a hard ceiling of 12 megapixels per frame
+stops the top preset from configuring a slideshow on a 6K display. Where the
+browser exposes `EXT_disjoint_timer_query_webgl2` the HUD reports real GPU
+milliseconds and the adaptive controller targets those instead of frame time,
+which also contains the simulation and the compositor. The bloom and composite
+passes run at `mediump`, which Apple and Adreno GPUs execute at double rate.
+
+```js
+await latticeborn.benchmark()   // or the button in the panel
+```
+
+Sweeps every preset and prints resolution, median and p95 frame time, GPU time
+where measurable, and rays per second — which is the number that scales with
+the hardware.
+
 ### Importing avatars
 
 Drag a `.vrm` or `.glb` onto the window and you are wearing it.

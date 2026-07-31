@@ -14,7 +14,15 @@ import { dirname, join, relative, resolve } from 'node:path';
 const ROOT = resolve(new URL('..', import.meta.url).pathname);
 
 const PAGES = {
-  world: { entry: 'web/world.js', page: 'web/world.html', styles: ['web/world.css'], out: 'dist/latticeborn-pandora.html' },
+  world: {
+    entry: 'web/world.js',
+    page: 'web/world.html',
+    styles: ['web/world.css'],
+    out: 'dist/latticeborn-pandora.html',
+    // Inlined rather than fetched: the whole point of the bundle is that it
+    // runs from a file:// URL or behind a CSP that forbids fetching anything.
+    avatar: 'assets/avatars/latticeborn-testbed.vrm',
+  },
   grove: { entry: 'web/demo.js', page: 'web/demo.html', styles: ['web/styles.css', 'web/demo.css'], out: 'dist/latticeborn-grove.html' },
 };
 
@@ -131,13 +139,19 @@ const body = page.slice(bodyOpen, page.lastIndexOf('</body>'))
   .replace(/href="index\.html"/g, 'href="#top"')
   .replace(/<a href="#top">Publication<\/a>\s*/, '');
 
+const avatar = PAGE.avatar
+  ? `<script>window.__latticebornAvatar = ${JSON.stringify(
+      (await readFile(join(ROOT, PAGE.avatar))).toString('base64'),
+    )};</script>\n`
+  : '';
+
 const title = /<title>([^<]*)<\/title>/.exec(page)?.[1] ?? 'Latticeborn';
 const html = `<title>${title}</title>
 <style>
 ${styles}
 </style>
 ${body}
-<script type="module">
+${avatar}<script type="module">
 ${RUNTIME}
 ${[...modules.values()].join('\n\n')}
 __require(${JSON.stringify(entryId)});

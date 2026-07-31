@@ -19,8 +19,16 @@ seed, and it is stored nowhere: it is a term in the height function.
 ```bash
 npm run serve      # then open http://localhost:8080
 npm run walk       # or walk the same world in your terminal
-npm test           # 66 checks across the substrate, runtime, and world
+npm test           # 115 checks across the substrate, runtime, and world
+npm run bundle     # dist/latticeborn-pandora.html — the whole thing, one file
 ```
+
+There is no build step: `npm run serve` hands the browser the same ES modules
+that are in `src/`. The bundle exists only for places that cannot fetch modules
+from disk — a `file://` URL, an offline copy, a strict content policy. It
+inlines the engine, the page, the styles, and the test avatar, makes no network
+request of any kind, and falls back to drag-to-look where a sandboxed frame
+refuses pointer lock.
 
 ---
 

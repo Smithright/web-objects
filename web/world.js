@@ -15,7 +15,7 @@ import { CameraRig, InputController } from '../src/demo/input.js';
 import { QUALITY, buildCamera, createRaymarchRenderer } from '../src/demo/renderers/raymarch.js';
 import { RegionState } from '../src/core/regions.js';
 import { findBones, importAvatarBytes, poseWalk } from '../src/demo/avatar.js';
-import { inspectSlot, slotPath } from '../src/core/scene.js';
+import { destroySlot, inspectSlot, slotPath } from '../src/core/scene.js';
 import { handleIndex } from '../src/core/ids.js';
 import { PRIMITIVES } from '../src/core/primitives.js';
 import { FluxGraph, attachGraph, installFlux } from '../src/core/protoflux.js';
@@ -112,7 +112,7 @@ function wearAvatar(buffer, name) {
     wearing = {
       ...instance,
       bones: findBones(world, instance.root),
-      module: { destroySlot: destroySlotRef },
+      module: { destroySlot },
       name,
     };
     const s = instance.summary;
@@ -128,10 +128,18 @@ function wearAvatar(buffer, name) {
   }
 }
 
-let destroySlotRef = null;
-
 async function loadDefaultAvatar() {
   try {
+    // The single-file bundle inlines the avatar, because it has to run from a
+    // file:// URL and behind content policies that forbid fetching anything.
+    const inlined = window.__latticebornAvatar;
+    if (typeof inlined === 'string') {
+      const binary = atob(inlined);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      wearAvatar(bytes.buffer, 'latticeborn-testbed');
+      return;
+    }
     const response = await fetch('/assets/avatars/latticeborn-testbed.vrm');
     if (!response.ok) return;
     wearAvatar(await response.arrayBuffer(), 'latticeborn-testbed');
@@ -930,10 +938,9 @@ function start() {
     wearAvatar(await file.arrayBuffer(), file.name.replace(/\.[^.]+$/, ''));
   });
 
-  import('../src/core/scene.js').then((scene) => {
-    destroySlotRef = scene.destroySlot;
-    loadDefaultAvatar();
-  });
+  // Static import, not dynamic: the module is already in the graph above, and
+  // a dynamic import() is a fetch the single-file bundle cannot serve.
+  loadDefaultAvatar();
 
   const shortName = adapter.replace(/^ANGLE \(|\)$/g, '').split(',')[1]?.trim() || adapter.slice(0, 46) || 'WebGL2';
   ui.gateWebgl.textContent =
@@ -1066,6 +1073,12 @@ window.latticeborn = {
   },
   get lastStats() {
     return lastStats;
+  },
+  get input() {
+    return input;
+  },
+  get look() {
+    return { ...look };
   },
   enter,
   banner,

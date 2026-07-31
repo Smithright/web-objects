@@ -70,6 +70,7 @@ export class InputController {
 
     this.keys = new Set();
     this.pointerLocked = false;
+    this.dragging = false;
     this.gamepadIndex = null;
     this.device = 'keyboard';
     this.lastPad = { buttons: [], axes: [] };
@@ -101,13 +102,23 @@ export class InputController {
     this._onBlur = () => this.keys.clear();
 
     this._onMouseMove = (event) => {
-      if (!this.pointerLocked) return;
+      // Drag to look when the pointer is not locked. Pointer lock is the good
+      // path, but a sandboxed iframe can refuse it, and a world you cannot
+      // turn around in is not a world.
+      if (!this.pointerLocked && !this.dragging) return;
       this.device = 'mouse';
       this.state.yawDelta -= event.movementX * this.lookSpeed;
       this.state.pitchDelta -= event.movementY * this.lookSpeed * (this.invertY ? -1 : 1);
     };
+    this._onMouseDown = (event) => {
+      if (event.button === 0 && !this.pointerLocked && event.target === this.element) this.dragging = true;
+    };
+    this._onMouseUp = () => {
+      this.dragging = false;
+    };
     this._onPointerLockChange = () => {
       this.pointerLocked = document.pointerLockElement === this.element;
+      if (this.pointerLocked) this.dragging = false;
       options.onPointerLockChange?.(this.pointerLocked);
     };
     this._onGamepadConnected = (event) => {
@@ -124,6 +135,8 @@ export class InputController {
     addEventListener('keyup', this._onKeyUp);
     addEventListener('blur', this._onBlur);
     addEventListener('mousemove', this._onMouseMove);
+    addEventListener('mousedown', this._onMouseDown);
+    addEventListener('mouseup', this._onMouseUp);
     document.addEventListener('pointerlockchange', this._onPointerLockChange);
     addEventListener('gamepadconnected', this._onGamepadConnected);
     addEventListener('gamepaddisconnected', this._onGamepadDisconnected);
@@ -139,7 +152,15 @@ export class InputController {
   }
 
   requestPointerLock() {
-    this.element.requestPointerLock?.();
+    // A sandboxed frame refuses this, and refuses it as a rejected promise in
+    // newer browsers and a thrown error in older ones. Neither is a failure
+    // worth reporting: drag-to-look covers the case.
+    try {
+      const pending = this.element.requestPointerLock?.();
+      if (pending && typeof pending.catch === 'function') pending.catch(() => {});
+    } catch {
+      /* no pointer lock here */
+    }
   }
 
   /** Poll the gamepad. Browsers only expose a snapshot, so this must be per frame. */
@@ -230,6 +251,8 @@ export class InputController {
     removeEventListener('keyup', this._onKeyUp);
     removeEventListener('blur', this._onBlur);
     removeEventListener('mousemove', this._onMouseMove);
+    removeEventListener('mousedown', this._onMouseDown);
+    removeEventListener('mouseup', this._onMouseUp);
     document.removeEventListener('pointerlockchange', this._onPointerLockChange);
     removeEventListener('gamepadconnected', this._onGamepadConnected);
     removeEventListener('gamepaddisconnected', this._onGamepadDisconnected);

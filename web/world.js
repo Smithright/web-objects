@@ -243,7 +243,7 @@ function frame(now) {
   });
   lastStats = stats;
 
-  if (adaptive) tuneResolution();
+  if (adaptive) tuneResolution(now);
   // Throttle the HUD by wall clock, not by tick count: the tick rate varies
   // with frame time and a modulo on it silently stops firing.
   if (now - lastHud > 110) {
@@ -436,23 +436,83 @@ function handleBuildKey(event) {
   }
 }
 
-/** Keep the frame budget: resolution first, because it is the cheapest knob. */
-function tuneResolution() {
-  const current = renderer.stats.renderScale;
-  const ceiling = QUALITY[renderer.quality].scale;
+/**
+ * Keep the frame budget: resolution first, because it is the cheapest knob.
+ *
+ * This is a feedback controller, and the first version of it was written as if
+ * it were a graphics function — evaluate the error, act on it, every frame.
+ * That is an oscillator. Below the low threshold it added 0.03 per frame, and
+ * every change resized the canvas: the browser's upscale to CSS pixels shifted
+ * by a fraction of a pixel and the temporal history was thrown away, so the
+ * image visibly crawled while the accumulator never got the sixteen frames it
+ * needs. On a fast machine it did that forever.
+ *
+ * So: a wide deadband, quantised steps so no adjustment is too small to matter,
+ * a decision every half second rather than every frame, and two consecutive
+ * agreeing decisions before acting. A controller that does nothing is the
+ * correct behaviour almost always, and doing nothing must be free.
+ */
+const RESOLUTION = {
+  shedAbove: 20, // ms
+  climbBelow: 9,
+  step: 0.05, // quantised: a change is always a real change in pixels
+  tick: 250, // ms between decisions
+  shedAfter: 2, // decisions over budget before shedding — half a second
+  climbAfter: 8, // decisions under budget before climbing — two seconds
+};
+let tuneAt = 0;
+let tuneAgreement = 0;
+
+/**
+ * Decide in wall-clock time, not in frames.
+ *
+ * The obvious counter — "act every N frames" — is exactly backwards, because
+ * when the renderer is in trouble, frames are the scarce thing. Thirty frames
+ * at five fps is six seconds of the user sitting in the mess before anything
+ * happens. Milliseconds do not slow down when the GPU does.
+ *
+ * And the response is asymmetric on purpose: shed after half a second over
+ * budget, climb only after two seconds under it. Being over budget is felt
+ * immediately; being under it is not felt at all, so there is nothing to win
+ * by climbing fast and a settled image to lose. Two seconds is also more than
+ * the sixteen frames the temporal accumulator needs to converge, at any frame
+ * rate worth climbing from.
+ */
+function tuneResolution(now) {
   // A measured GPU time is the honest signal. Frame time also contains the
   // simulation, the compositor, and whatever else the machine is doing.
   const timing = renderer.timing;
   const budget = timing.measured && timing.gpuAvgMs > 0 ? timing.gpuAvgMs : perf.frameMs;
   perf.budgetMs = budget;
-  if (budget > 26) {
-    // Shed resolution in proportion to how far over budget we are, so a very
-    // slow device converges in a few frames instead of a few hundred.
-    const overshoot = Math.min(0.35, (budget - 26) / 400);
-    if (current > 0.25) renderer.setRenderScale(current - 0.03 - overshoot);
-  } else if (budget < 15 && current < ceiling) {
-    renderer.setRenderScale(Math.min(ceiling, current + 0.03));
+
+  if (now - tuneAt < RESOLUTION.tick) return;
+  tuneAt = now;
+
+  const current = renderer.stats.renderScale;
+  const ceiling = QUALITY[renderer.quality].scale;
+  let direction = 0;
+  if (budget > RESOLUTION.shedAbove && current > 0.25) direction = -1;
+  else if (budget < RESOLUTION.climbBelow && current < ceiling) direction = 1;
+
+  // In the band, or already at a limit: forget the history and hold.
+  if (direction === 0) {
+    tuneAgreement = 0;
+    return;
   }
+  // A single slow frame is a hitch, not a trend.
+  if (Math.sign(tuneAgreement) !== direction) tuneAgreement = 0;
+  tuneAgreement += direction;
+  const patience = direction < 0 ? RESOLUTION.shedAfter : RESOLUTION.climbAfter;
+  if (Math.abs(tuneAgreement) < patience) return;
+  tuneAgreement = 0;
+
+  // Shed in proportion to the overshoot, so a machine that is badly over
+  // budget converges in a second rather than in twenty steps of 0.05.
+  const steps = direction < 0 ? Math.min(6, Math.ceil((budget - RESOLUTION.shedAbove) / 12) + 1) : 1;
+  const target = current + direction * RESOLUTION.step * steps;
+  const quantized = Math.min(ceiling, Math.max(0.25, Math.round(target / RESOLUTION.step) * RESOLUTION.step));
+  if (Math.abs(quantized - current) < 1e-6) return;
+  renderer.setRenderScale(quantized);
 }
 
 /**

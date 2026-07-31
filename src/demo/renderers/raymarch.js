@@ -1087,7 +1087,6 @@ export function createRaymarchRenderer(canvas, options = {}) {
   // Float render targets keep the bloom honest; without them everything above
   // white is clipped before the bright pass ever sees it.
   const hdr = gl.getExtension('EXT_color_buffer_float');
-  const linearFloat = gl.getExtension('OES_texture_float_linear');
   // Without this, "ms per frame" measures how long it took to *submit* the
   // work, which on a fast GPU is a number that means nothing at all.
   const timer = gl.getExtension('EXT_disjoint_timer_query_webgl2');
@@ -1134,6 +1133,10 @@ export function createRaymarchRenderer(canvas, options = {}) {
     lastMs: 0, avgMs: 16,       // CPU: time spent submitting
     gpuMs: 0, gpuAvgMs: 0,      // GPU: time spent drawing, when measurable
     cssWidth: 0, cssHeight: 0,
+    // How many times the render targets have been rebuilt. Every rebuild is a
+    // canvas resize and a discarded temporal history, so on a settled machine
+    // this must stop climbing. If it does not, the image will crawl.
+    resizes: 0,
   };
   const pendingQueries = [];
 
@@ -1152,7 +1155,11 @@ export function createRaymarchRenderer(canvas, options = {}) {
     const texture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, width, height, 0, gl.RGBA, textureType, null);
-    const filter = hdr && !linearFloat ? gl.NEAREST : gl.LINEAR;
+    // RGBA16F is texture-filterable in core WebGL2 — OES_texture_float_linear
+    // governs 32-bit float, which is not what these targets are. Gating on it
+    // dropped the history buffer to NEAREST wherever it is not exposed, and a
+    // temporal resolve whose history snaps to texel centres crawls.
+    const filter = gl.LINEAR;
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -1215,6 +1222,7 @@ export function createRaymarchRenderer(canvas, options = {}) {
     const bh = Math.max(16, height >> 2);
     targets.bloomA = makeTarget(bw, bh);
     targets.bloomB = makeTarget(bw, bh);
+    state.resizes++;
   }
 
   function setting(name) {
@@ -1226,25 +1234,30 @@ export function createRaymarchRenderer(canvas, options = {}) {
     quality = QUALITY[name];
     qualityName = name;
     renderScale = overrides.scale ?? quality.scale;
-    state.width = 0; // force a resize on the next frame
   }
 
   /** Individual graphics options, layered over the preset. */
   function setOption(name, value) {
     if (value === null || value === undefined) delete overrides[name];
     else overrides[name] = value;
-    if (name === 'scale') {
-      renderScale = overrides.scale ?? quality.scale;
-      state.width = 0;
-    }
+    if (name === 'scale') renderScale = overrides.scale ?? quality.scale;
     // Turning accumulation back on must not resume from a history captured
     // before it was turned off.
     if (name === 'taa') hasHistory = false;
   }
 
+  /**
+   * Ask for a render scale. Nothing happens here beyond storing it.
+   *
+   * This used to zero state.width to force a resize, which made resize()
+   * tear down and rebuild every render target — and reset the temporal
+   * history — even when the new scale rounded to the exact same pixel
+   * dimensions. resize() runs every frame and already compares dimensions;
+   * letting it decide means a scale change that changes nothing costs
+   * nothing.
+   */
   function setRenderScale(scale) {
     renderScale = Math.max(0.2, Math.min(2, scale));
-    state.width = 0;
   }
 
   /**
@@ -1253,7 +1266,6 @@ export function createRaymarchRenderer(canvas, options = {}) {
    */
   function setPixelRatio(ratio) {
     pixelRatio = Math.max(0.5, Math.min(3, ratio));
-    state.width = 0;
   }
 
   /**

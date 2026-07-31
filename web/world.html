@@ -53,6 +53,16 @@
     </section>
 
     <div class="crosshair" id="crosshair" hidden></div>
+
+    <section class="buildbar" id="buildbar" hidden>
+      <div class="chip" id="buildKind"><b>box</b></div>
+      <div class="palette" id="buildPalette"></div>
+      <p class="hint" id="buildTarget">nothing under the cursor</p>
+      <p class="hint keys">
+        <b>1–7</b> shape · <b>click</b> place · <b>G</b> grab/drop · <b>wheel</b> reach · <b>[ ]</b> size<br />
+        <b>C</b> duplicate · <b>X</b> delete · <b>F</b> animate · <b>Z</b>/<b>Y</b> undo/redo · <b>B</b> exit build
+      </p>
+    </section>
     <p class="banner" id="banner"></p>
   </div>
 
@@ -77,6 +87,13 @@
       <p class="note">A region exists as a formula until somebody witnesses it. From then on it keeps a log — and the log, not the state, is what is stored.</p>
       <dl class="readout" id="panelMemory"></dl>
       <div class="log" id="memoryLog"></div>
+    </section>
+
+    <section>
+      <h2>Selection</h2>
+      <p class="note">Everything in the world is a slot with components — an imported avatar's forearm and a box you spawned are the same kind of thing.</p>
+      <dl class="readout" id="panelSelection"></dl>
+      <div class="log" id="componentList"></div>
     </section>
 
     <section>

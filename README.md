@@ -112,6 +112,52 @@ latticeborn-testbed/Testbed/hips/spine/chest/upperChest/leftShoulder/leftUpperAr
 The file's own licence is surfaced, not buried: `avatarPermission`,
 `commercialUsage`, and author land in the event log and on screen.
 
+### Building
+
+Press **B**. Everything you do is a command, so everything you do replays — and
+undo is not a stack of inverse operations, it is the time layer already in the
+engine: each edit checkpoints the world first, and undo restores it.
+
+| | |
+| --- | --- |
+| `1`–`7` | box, sphere, cylinder, cone, plane, torus, capsule |
+| click | place · **right-click** select · **G** grab or drop |
+| wheel / `[` `]` | reach · size |
+| `C` `X` | duplicate · delete |
+| `F` | animate the selection with a Flux graph |
+| `Z` `Y` | undo · redo |
+
+A primitive is stored as its descriptor, not its vertices, so a thousand
+identical boxes are one mesh and a saved item is a few hundred bytes of text.
+Grabbing is a *state*, not a stream: `build.grab` says what you hold and how
+far away, and a system moves it every tick — two commands per grab instead of
+sixty a second, which keeps the recording of a build session legible.
+
+Consequences are named apart from the commands that caused them —
+`build.spawn` is somebody asking, `slot.spawned` is it having happened — because
+a replay has to tell a refused intent from a carried-out one.
+
+### Flux — visual scripting
+
+A dataflow graph. Value nodes are pulled and memoized once per tick; **impulse**
+nodes are the roots, and they are the only ones allowed to touch the world —
+through the same capability sandbox agent behavior runs in.
+
+```js
+const graph = new FluxGraph('bob');
+const time = graph.add('Time');
+const wave = graph.add('Sin', { value: { node: time, output: 'seconds' } });
+graph.add('SetSlotPosition', { slot: index, y: { node: wave, output: 'value' } });
+
+attachGraph(world, graph, { slots: [index] });   // may move exactly one slot
+```
+
+The graph declares what it needs (`graph.capabilities()`), which the runtime
+then *narrows*: a script that wants to move any slot is admitted with permission
+to move one. Cycles are caught before it runs, node evaluations are metered, a
+graph that oversteps is denied and eventually switched off, and it never wins a
+tug-of-war with a person holding the object.
+
 ### The same world, other senses
 
 ```bash

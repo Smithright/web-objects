@@ -17,6 +17,9 @@ import { RegionState } from '../src/core/regions.js';
 import { findBones, importAvatarBytes, poseWalk } from '../src/demo/avatar.js';
 import { inspectSlot, slotPath } from '../src/core/scene.js';
 import { handleIndex } from '../src/core/ids.js';
+import { PRIMITIVES } from '../src/core/primitives.js';
+import { FluxGraph, attachGraph, installFlux } from '../src/core/protoflux.js';
+import { heldSlots, installBuild, raycastSlots } from '../src/demo/build.js';
 import { biomeAt, heightAt } from '../src/core/terrain.js';
 
 const ui = {
@@ -46,6 +49,12 @@ const ui = {
   chkClouds: document.getElementById('chkClouds'),
   chkReflection: document.getElementById('chkReflection'),
   chkIslands: document.getElementById('chkIslands'),
+  buildbar: document.getElementById('buildbar'),
+  buildKind: document.getElementById('buildKind'),
+  buildPalette: document.getElementById('buildPalette'),
+  buildTarget: document.getElementById('buildTarget'),
+  panelSelection: document.getElementById('panelSelection'),
+  componentList: document.getElementById('componentList'),
   chkInvert: document.getElementById('chkInvert'),
   rngSensitivity: document.getElementById('rngSensitivity'),
   checkpointNote: document.getElementById('checkpointNote'),
@@ -77,6 +86,8 @@ let accumulator = 0;
 let lastFrame = performance.now();
 let lastHud = 0;
 let wearing = null; // the imported avatar currently being worn, if any
+const build = { on: false, kind: 'box', palette: 0, target: null, selection: null, size: 1 };
+const PALETTE_SWATCHES = ['#d1d6e6', '#4dc7b8', '#f5b859', '#ae8cfa', '#f07370', '#6b9ef2'];
 const perf = { fps: 60, frameMs: 16, simMs: 0, ticks: 0 };
 const memoryLog = [];
 
@@ -129,6 +140,8 @@ async function loadDefaultAvatar() {
 
 function boot(seed) {
   world = createPandora(seed === undefined ? {} : { seed });
+  installBuild(world);
+  installFlux(world);
   const state = avatarState(world);
   look = { yaw: state.yaw, pitch: state.pitch };
   rig = new CameraRig({ yaw: look.yaw, pitch: look.pitch });
@@ -209,6 +222,7 @@ function frame(now) {
     { firstPerson, distance: rig.distance, groundAt: ground },
   );
   if (wearing) driveWornAvatar(state, dt);
+  if (build.on) updateBuildTarget(state);
 
   const stats = renderer.render(world, camera, {
     avatar: { ...state, phase: walkPhase, yaw: look.yaw },
@@ -250,6 +264,163 @@ function driveWornAvatar(state, dt) {
     speed: state.speed,
     grounded: state.grounded,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Build mode
+// ---------------------------------------------------------------------------
+
+/** What the crosshair is pointing at, from the same camera the shader uses. */
+function updateBuildTarget(state) {
+  const forward = {
+    x: Math.sin(look.yaw) * Math.cos(look.pitch),
+    y: Math.sin(look.pitch),
+    z: Math.cos(look.yaw) * Math.cos(look.pitch),
+  };
+  const held = heldSlots(world);
+  const hit = raycastSlots(world, state.position, forward, { maxDistance: 40, ignore: held });
+  build.target = hit;
+  if (hit) {
+    const name = world.store('scene').name(handleIndex(hit.handle)) ?? 'slot';
+    ui.buildTarget.textContent = `${name} · ${hit.distance.toFixed(1)} m`;
+  } else {
+    ui.buildTarget.textContent = held.length ? 'holding — G to drop' : 'nothing under the cursor';
+  }
+}
+
+function spawnAhead(state) {
+  const reach = 3.5;
+  world.submit({
+    op: 'build.spawn',
+    actor: 'player',
+    payload: {
+      kind: build.kind,
+      palette: build.palette,
+      scale: build.size,
+      position: [
+        state.position.x + Math.sin(look.yaw) * Math.cos(look.pitch) * reach,
+        state.position.y + Math.sin(look.pitch) * reach,
+        state.position.z + Math.cos(look.yaw) * Math.cos(look.pitch) * reach,
+      ],
+    },
+  });
+  banner(`${build.kind} placed`);
+}
+
+function selectTarget() {
+  build.selection = build.target?.handle ?? null;
+  if (build.selection) banner(`selected ${world.store('scene').name(handleIndex(build.selection))}`);
+}
+
+/** Make the selection move on its own, sandboxed to that one slot. */
+function animateSelection() {
+  const handle = build.selection ?? build.target?.handle;
+  if (!handle) return banner('nothing selected to animate');
+  installFlux(world);
+  const index = handleIndex(handle);
+  const transform = world.ecs.get(handle, 'WorldTransform');
+
+  const graph = new FluxGraph(`bob-${index}`);
+  const time = graph.add('Time');
+  const wave = graph.add('Sin', { value: { node: time, output: 'seconds' } });
+  const height = graph.add('Multiply', { a: { node: wave, output: 'value' }, b: 0.6 });
+  const y = graph.add('Add', { a: { node: height, output: 'value' }, b: transform.py });
+  graph.add('SetSlotPosition', { slot: index, x: transform.px, y: { node: y, output: 'value' }, z: transform.pz });
+  const spin = graph.add('Multiply', { a: { node: time, output: 'seconds' }, b: 0.9 });
+  graph.add('SetSlotSpin', { slot: index, angle: { node: spin, output: 'value' } });
+
+  // The graph is admitted with permission to move exactly this one slot.
+  attachGraph(world, graph, { slots: [index] });
+  banner(`flux graph attached — ${graph.nodes.length} nodes, scoped to one slot`);
+}
+
+function toggleBuild(force) {
+  build.on = force ?? !build.on;
+  ui.buildbar.hidden = !build.on;
+  document.body.dataset.build = build.on ? 'on' : 'off';
+  banner(build.on ? 'build mode' : 'build mode off');
+  if (build.on) renderPalette();
+}
+
+function renderPalette() {
+  ui.buildKind.innerHTML = `<b>${build.kind}</b> · size ${build.size.toFixed(2)}`;
+  ui.buildPalette.replaceChildren(
+    ...PALETTE_SWATCHES.map((colour, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.style.background = colour;
+      button.className = index === build.palette ? 'active' : '';
+      button.title = `palette ${index + 1}`;
+      button.addEventListener('click', () => {
+        build.palette = index;
+        renderPalette();
+      });
+      return button;
+    }),
+  );
+}
+
+function handleBuildKey(event) {
+  if (event.code === 'KeyB') {
+    toggleBuild();
+    return true;
+  }
+  if (!build.on) return false;
+
+  const digit = /^Digit([1-7])$/.exec(event.code);
+  if (digit) {
+    build.kind = PRIMITIVES[Number(digit[1]) - 1] ?? 'box';
+    renderPalette();
+    return true;
+  }
+
+  switch (event.code) {
+    case 'KeyG': {
+      const held = heldSlots(world);
+      if (held.length) world.submit({ op: 'build.release', actor: 'player', payload: {} });
+      else if (build.target) {
+        world.submit({
+          op: 'build.grab',
+          actor: 'player',
+          payload: { slot: handleIndex(build.target.handle), distance: Math.max(1.5, build.target.distance) },
+        });
+      }
+      return true;
+    }
+    case 'KeyX':
+      if (build.target) {
+        world.submit({ op: 'build.delete', actor: 'player', payload: { slot: handleIndex(build.target.handle) } });
+        banner('deleted — Z to undo');
+      }
+      return true;
+    case 'KeyC':
+      if (build.target) {
+        world.submit({ op: 'build.duplicate', actor: 'player', payload: { slot: handleIndex(build.target.handle) } });
+      }
+      return true;
+    case 'KeyF':
+      animateSelection();
+      return true;
+    case 'KeyZ':
+      world.submit({ op: 'build.undo', actor: 'player', payload: {} });
+      banner(`undo: ${world.store('undo').labels.undo ?? 'nothing'}`);
+      return true;
+    case 'KeyY':
+      world.submit({ op: 'build.redo', actor: 'player', payload: {} });
+      return true;
+    case 'BracketLeft':
+    case 'BracketRight': {
+      const factor = event.code === 'BracketRight' ? 1.25 : 0.8;
+      if (heldSlots(world).length) world.submit({ op: 'build.adjust', actor: 'player', payload: { scale: factor } });
+      else {
+        build.size = Math.min(20, Math.max(0.05, build.size * factor));
+        renderPalette();
+      }
+      return true;
+    }
+    default:
+      return false;
+  }
 }
 
 /** Keep the frame budget: resolution first, because it is the cheapest knob. */
@@ -396,6 +567,33 @@ function updatePanel(state, stats, totals) {
     ['render scale', { text: `${(renderer.stats.renderScale * 100).toFixed(0)}%`, cls: renderer.stats.renderScale > 1 ? 'good' : '' }],
     ['resolution', `${stats.width}×${stats.height}`],
   ]);
+
+  const selected = build.selection ?? build.target?.handle ?? null;
+  if (selected && world.ecs.alive(selected)) {
+    const info = inspectSlot(world, selected);
+    kv(ui.panelSelection, [
+      ['name', info.name],
+      ['path', info.path.length > 40 ? `…${info.path.slice(-38)}` : info.path],
+      ['depth', String(info.depth)],
+      ['children', String(info.children)],
+      ['position', info.world.position.map((v) => v.toFixed(1)).join(', ')],
+      ['scale', info.local.scale[0].toFixed(2)],
+      ['assets', info.assets.map((a) => `${a.kind} ${a.id}`).join(', ') || '—'],
+    ]);
+    ui.componentList.replaceChildren(
+      ...info.components.map((component) => {
+        const row = document.createElement('div');
+        const values = Object.entries(component.values)
+          .map(([key, value]) => `${key} ${typeof value === 'number' ? value.toFixed(2) : value}`)
+          .join('  ');
+        row.innerHTML = `<span>${escapeHtml(component.name)}</span><div>${escapeHtml(values.slice(0, 90))}</div>`;
+        return row;
+      }),
+    );
+  } else {
+    kv(ui.panelSelection, [['selection', 'point at something in build mode']]);
+    ui.componentList.replaceChildren();
+  }
 
   kv(ui.panelWorld, [
     ['universe', world.universe],
@@ -597,8 +795,22 @@ function start() {
     if (event.code === 'Tab') {
       event.preventDefault();
       togglePanel();
+      return;
     }
+    if (event.repeat) return;
+    if (handleBuildKey(event)) event.preventDefault();
   });
+
+  ui.canvas.addEventListener('mousedown', (event) => {
+    if (!build.on || !running || !document.pointerLockElement) return;
+    if (event.button === 0) spawnAhead(avatarState(world));
+    if (event.button === 2) selectTarget();
+  });
+  ui.canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+  addEventListener('wheel', (event) => {
+    if (!build.on || !heldSlots(world).length) return;
+    world.submit({ op: 'build.adjust', actor: 'player', payload: { distance: event.deltaY > 0 ? -0.5 : 0.5 } });
+  }, { passive: true });
 
   ui.btnQuality.addEventListener('click', () => {
     const order = ['low', 'medium', 'high', 'ultra', 'max'];
@@ -714,6 +926,10 @@ function escapeHtml(text) {
 // Exposed for the headless smoke test, which drives the same code path a
 // player does rather than a special one.
 window.latticeborn = {
+  build,
+  toggleBuild,
+  spawnAhead: () => spawnAhead(avatarState(world)),
+  animateSelection,
   get wearing() {
     return wearing;
   },

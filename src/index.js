@@ -109,7 +109,30 @@ export {
   pandoraOptions,
   regionContents,
 } from './demo/pandora.js';
+export { PRIMITIVES, makePrimitive } from './core/primitives.js';
+export {
+  FluxGraph,
+  FluxType,
+  NODES as FLUX_NODES,
+  attachGraph,
+  evaluateGraph,
+  installFlux,
+  runFluxGraphs,
+} from './core/protoflux.js';
 export { BONE_TAG, findBones, importAvatar, importAvatarBytes, poseBone, poseWalk } from './demo/avatar.js';
+export {
+  GRAB_MAX_DISTANCE,
+  UndoStack,
+  builtSlots,
+  duplicateSlot,
+  exportItem,
+  heldSlots,
+  importItem,
+  installBuild,
+  intersectAABB,
+  raycastSlots,
+  spawnPrimitive,
+} from './demo/build.js';
 export { renderAscii, renderLegend } from './demo/renderers/ascii.js';
 export { renderAscii3d } from './demo/renderers/ascii3d.js';
 export { renderSemantic } from './demo/renderers/semantic.js';

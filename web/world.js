@@ -658,9 +658,14 @@ function updatePanel(state, stats, totals) {
     (() => {
       const native = renderer.stats.cssWidth * (devicePixelRatio || 1);
       const fraction = native > 0 ? stats.width / native : 1;
-      return ['of native', {
-        text: `${(fraction * 100).toFixed(0)}%${fraction < 0.999 ? ' — upscaled' : ''}`,
-        cls: fraction >= 0.999 ? 'good' : fraction < 0.7 ? 'warn' : '',
+      const whole = fraction >= 0.999;
+      // Below native, what happens next is the difference between an edge and
+      // a staircase: accumulation reconstructs the missing samples over time,
+      // and without it the browser simply stretches what is there.
+      const how = whole ? '' : stats.taa ? ' — reconstructed' : ' — upscaled';
+      return ['rays of native', {
+        text: `${(fraction * 100).toFixed(0)}%${how}`,
+        cls: whole || (stats.taa && fraction >= 0.45) ? 'good' : fraction < 0.5 ? 'warn' : '',
       }];
     })(),
     ['resolution', `${stats.width}×${stats.height}`],

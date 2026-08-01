@@ -71,6 +71,12 @@ export const QUALITY = {
  */
 export const MAX_PRIMARY_RAYS = 12e6;
 
+/** GLSL smoothstep, on the CPU side. */
+function smoothstepScalar(edge0, edge1, x) {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
 const FULLSCREEN_VERTEX = `#version 300 es
 precision highp float;
 out vec2 vUv;
@@ -891,7 +897,8 @@ uniform sampler2D uDepth;
 uniform mat4 uPrevViewProjection;
 uniform mat3 uCamBasis;
 uniform vec3 uCamPos;
-uniform vec2 uResolution;
+uniform vec2 uResolution;      // output: one texel per physical pixel
+uniform vec2 uSceneResolution; // where the rays were actually cast
 uniform vec2 uJitter;
 uniform float uFov;
 uniform float uNear;
@@ -938,17 +945,40 @@ float linearDepth(float depth) {
 }
 
 void main() {
-  vec3 current = texture(uScene, vUv).rgb;
+  // Point-sample the march, do not filter it.
+  //
+  // Each scene texel is one ray, cast at a sub-pixel offset that changes every
+  // frame. Sampling it bilinearly would smear neighbouring rays together
+  // before the accumulator ever sees them, and a blurred sample accumulated
+  // sixteen times is still blurred. Reading the texel centre gives the raw
+  // sample; the history is what turns sixteen of them into a sharp pixel.
+  vec2 sceneUv = (floor(vUv * uSceneResolution) + 0.5) / uSceneResolution;
+  vec3 current = texture(uScene, sceneUv).rgb;
   if (uHasHistory == 0) {
-    fragColor = vec4(current, 1.0);
+    // Nothing to reconstruct from yet — filter it so the first frame after a
+    // reset is soft rather than blocky.
+    fragColor = vec4(texture(uScene, vUv).rgb, 1.0);
     return;
   }
+
+  // Where that ray actually landed, in output pixels away from here.
+  //
+  // uJitter is in NDC, which spans 2 across the screen, so half of it is the
+  // offset in UV. An output pixel sitting right on top of this frame's sample
+  // has just been measured and should mostly believe what it measured; one
+  // sitting between samples has not, and should hold what it already knew
+  // until a later frame's jitter lands nearer to it. That difference is the
+  // whole of the upsampling — sixteen jittered low-resolution samples
+  // reconstructing a full-resolution image, rather than one being stretched.
+  vec2 sampleUv = sceneUv + uJitter * 0.5;
+  float away = length((vUv - sampleUv) * uResolution);
+  float proximity = exp(-2.0 * away * away);
 
   // Sky has no surface to reproject, but it is not stationary either — turn
   // the camera and it slides across the screen like everything else. Treat it
   // as a surface at the far plane, which is the right answer for rotation and
   // close enough for translation when the far plane is 12 km away.
-  float depth = texture(uDepth, vUv).r;
+  float depth = texture(uDepth, sceneUv).r;
   bool sky = depth >= 0.999999;
 
   // Depth -> view-space Z -> the world point this pixel saw.
@@ -973,20 +1003,27 @@ void main() {
   // it is too generous: one bright outlier widens the box enough to let a
   // ghost through. Clip to the mean plus a multiple of the standard deviation
   // instead — the box tracks how varied the neighbourhood actually is.
-  vec2 texel = 1.0 / uResolution;
+  vec2 texel = 1.0 / uSceneResolution;
   vec3 m1 = vec3(0.0);
   vec3 m2 = vec3(0.0);
   for (int y = -1; y <= 1; y++) {
     for (int x = -1; x <= 1; x++) {
-      vec3 neighbour = texture(uScene, vUv + vec2(float(x), float(y)) * texel).rgb;
+      vec3 neighbour = texture(uScene, sceneUv + vec2(float(x), float(y)) * texel).rgb;
       m1 += neighbour;
       m2 += neighbour * neighbour;
     }
   }
   vec3 mean = m1 / 9.0;
   vec3 sigma = sqrt(max(vec3(0.0), m2 / 9.0 - mean * mean));
-  vec3 lo = mean - sigma * 1.25;
-  vec3 hi = mean + sigma * 1.25;
+  // The box has to widen with the upsample ratio, and this is the tension at
+  // the heart of upsampling: the clip bounds the history by what the current
+  // frame's neighbourhood contains, and a low-resolution neighbourhood cannot
+  // contain the detail being reconstructed. Clip it as tightly at 2x as at 1x
+  // and the accumulator dutifully throws away everything it just rebuilt.
+  float upsample = uResolution.x / max(1.0, uSceneResolution.x);
+  float width = 1.25 * (1.0 + 1.1 * clamp(upsample - 1.0, 0.0, 1.5));
+  vec3 lo = mean - sigma * width;
+  vec3 hi = mean + sigma * width;
   vec3 history = clamp(sampleHistory(historyUv), lo, hi);
 
   // Reject on a large depth disagreement — a silhouette edge that moved.
@@ -1011,7 +1048,9 @@ void main() {
   vec2 edge = min(historyUv, 1.0 - historyUv);
   float border = smoothstep(0.0, 0.04, min(edge.x, edge.y));
 
-  fragColor = vec4(mix(current, history, uBlend * rejection * border), 1.0);
+  // Trust a fresh measurement, hold everything else.
+  float blend = mix(min(0.985, uBlend + 0.09), uBlend * 0.62, proximity);
+  fragColor = vec4(mix(current, history, blend * rejection * border), 1.0);
 }`;
 
 const COMPOSITE_SHADER = `#version 300 es
@@ -1143,7 +1182,7 @@ export function createRaymarchRenderer(canvas, options = {}) {
   const blur = link(gl, BLUR_SHADER, ['uSource', 'uDirection']);
   const resolve = link(gl, RESOLVE_SHADER, [
     'uScene', 'uHistory', 'uDepth', 'uPrevViewProjection', 'uCamBasis', 'uCamPos',
-    'uResolution', 'uJitter', 'uFov', 'uNear', 'uFar', 'uBlend', 'uHasHistory',
+    'uResolution', 'uSceneResolution', 'uJitter', 'uFov', 'uNear', 'uFar', 'uBlend', 'uHasHistory',
   ]);
   const composite = link(gl, COMPOSITE_SHADER, [
     'uScene', 'uBloom', 'uBloomStrength', 'uExposure', 'uVignette', 'uTime', 'uSeed', 'uResolution',
@@ -1169,6 +1208,7 @@ export function createRaymarchRenderer(canvas, options = {}) {
     lastMs: 0, avgMs: 16,       // CPU: time spent submitting
     gpuMs: 0, gpuAvgMs: 0,      // GPU: time spent drawing, when measurable
     cssWidth: 0, cssHeight: 0,
+    outputWidth: 0, outputHeight: 0,
     // How many times the render targets have been rebuilt. Every rebuild is a
     // canvas resize and a discarded temporal history, so on a settled machine
     // this must stop climbing. If it does not, the image will crawl.
@@ -1182,6 +1222,10 @@ export function createRaymarchRenderer(canvas, options = {}) {
   // camera was when we did.
   let historyIndex = 0;
   let hasHistory = false;
+  // Frames the accumulator has run uninterrupted. Stochastic sampling is
+  // borrowed against this: with no history there is nothing to average the
+  // noise into, so the noise must not be spent.
+  let accumulated = 0;
   let prevViewProjection = new Float32Array(16);
   let frameIndex = 0;
   const meshPass = createMeshPass(gl);
@@ -1229,6 +1273,20 @@ export function createRaymarchRenderer(canvas, options = {}) {
     gl.deleteFramebuffer(target.framebuffer);
   }
 
+  /**
+   * Size the two resolutions this renderer runs at.
+   *
+   * They are not the same, and conflating them is what made every edge a
+   * staircase. `width`/`height` is where the rays are cast — the expensive
+   * one, and the one `renderScale` governs. `outputWidth`/`outputHeight` is
+   * the canvas, the temporal history, and every post pass: always one texel
+   * per physical pixel, no matter how few rays were cast.
+   *
+   * Anti-aliasing done at the march resolution and then magnified to the
+   * display is not anti-aliasing, it is a blurred staircase. Accumulating the
+   * jittered march samples into a full-resolution history is, and it is the
+   * only way a 60%-resolution frame can have a 100%-resolution edge.
+   */
   function resize(cssWidth, cssHeight) {
     state.cssWidth = cssWidth;
     state.cssHeight = cssHeight;
@@ -1242,20 +1300,30 @@ export function createRaymarchRenderer(canvas, options = {}) {
     }
     const width = Math.max(64, Math.round(cssWidth * effective));
     const height = Math.max(64, Math.round(cssHeight * effective));
-    if (width === state.width && height === state.height) return;
-    canvas.width = width;
-    canvas.height = height;
+    // The display is never rendered below one texel per physical pixel, and
+    // never above it either: supersampling belongs in `renderScale`.
+    const outputWidth = Math.max(64, Math.round(cssWidth * pixelRatio));
+    const outputHeight = Math.max(64, Math.round(cssHeight * pixelRatio));
+    if (width === state.width && height === state.height
+        && outputWidth === state.outputWidth && outputHeight === state.outputHeight) return;
+    canvas.width = outputWidth;
+    canvas.height = outputHeight;
     state.width = width;
     state.height = height;
+    state.outputWidth = outputWidth;
+    state.outputHeight = outputHeight;
 
     for (const key of Object.keys(targets)) disposeTarget(targets[key]);
     sceneDepth = null;
+    // Rays here...
     targets.scene = makeTarget(width, height, true);
-    targets.historyA = makeTarget(width, height);
-    targets.historyB = makeTarget(width, height);
+    // ...pixels here.
+    targets.historyA = makeTarget(outputWidth, outputHeight);
+    targets.historyB = makeTarget(outputWidth, outputHeight);
     hasHistory = false; // a resize invalidates every reprojection
-    const bw = Math.max(16, width >> 2);
-    const bh = Math.max(16, height >> 2);
+    accumulated = 0;
+    const bw = Math.max(16, outputWidth >> 2);
+    const bh = Math.max(16, outputHeight >> 2);
     targets.bloomA = makeTarget(bw, bh);
     targets.bloomB = makeTarget(bw, bh);
     state.resizes++;
@@ -1279,7 +1347,10 @@ export function createRaymarchRenderer(canvas, options = {}) {
     if (name === 'scale') renderScale = overrides.scale ?? quality.scale;
     // Turning accumulation back on must not resume from a history captured
     // before it was turned off.
-    if (name === 'taa') hasHistory = false;
+    if (name === 'taa') {
+      hasHistory = false;
+      accumulated = 0;
+    }
   }
 
   /**
@@ -1313,6 +1384,7 @@ export function createRaymarchRenderer(canvas, options = {}) {
    */
   function resetHistory() {
     hasHistory = false;
+    accumulated = 0;
   }
 
   /** Collect finished GPU timer results. Queries land a frame or two late. */
@@ -1418,7 +1490,7 @@ export function createRaymarchRenderer(canvas, options = {}) {
 
   function drawTo(target) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.framebuffer : null);
-    gl.viewport(0, 0, target ? target.width : state.width, target ? target.height : state.height);
+    gl.viewport(0, 0, target ? target.width : state.outputWidth, target ? target.height : state.outputHeight);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
@@ -1465,9 +1537,13 @@ export function createRaymarchRenderer(canvas, options = {}) {
     // an unwrapped counter overflows a GLSL int inside an hour of play.
     gl.uniform1i(u.uFrame, frameIndex % 4096);
     // A stochastic light disc is only affordable because the accumulator
-    // averages it. Without accumulation the same sampling is just noise, so
-    // the shadow ray goes down the centre of the light instead.
-    gl.uniform1f(u.uSunRadius, taaOn ? setting('sun') ?? 0 : 0);
+    // averages it. Spend the noise in proportion to the ability to pay for it:
+    // the disc opens over the first dozen accumulated frames rather than being
+    // full width against an empty history, and it closes entirely below 0.45
+    // render scale, where one marched pixel covers several screen pixels and a
+    // sample's worth of noise therefore arrives several pixels wide.
+    const canAfford = Math.min(1, accumulated / 12) * smoothstepScalar(0.45, 0.8, renderScale);
+    gl.uniform1f(u.uSunRadius, taaOn ? (setting('sun') ?? 0) * canAfford : 0);
 
     const lightCount = gatherLights(world, camera);
     gl.uniform1i(u.uLightCount, lightCount);
@@ -1538,7 +1614,8 @@ export function createRaymarchRenderer(canvas, options = {}) {
       gl.uniformMatrix4fv(resolve.uniforms.uPrevViewProjection, false, prevViewProjection);
       gl.uniformMatrix3fv(resolve.uniforms.uCamBasis, false, camera.basis);
       gl.uniform3f(resolve.uniforms.uCamPos, camera.position.x, camera.position.y, camera.position.z);
-      gl.uniform2f(resolve.uniforms.uResolution, state.width, state.height);
+      gl.uniform2f(resolve.uniforms.uResolution, state.outputWidth, state.outputHeight);
+      gl.uniform2f(resolve.uniforms.uSceneResolution, state.width, state.height);
       gl.uniform2f(resolve.uniforms.uJitter, jitterX, jitterY);
       gl.uniform1f(resolve.uniforms.uFov, camera.fov ?? 0.58);
       gl.uniform1f(resolve.uniforms.uNear, NEAR);
@@ -1549,8 +1626,10 @@ export function createRaymarchRenderer(canvas, options = {}) {
       resolved = history;
       historyIndex = 1 - historyIndex;
       hasHistory = true;
+      accumulated++;
     } else {
       hasHistory = false;
+      accumulated = 0;
     }
 
     // Remember where the camera was, for the next frame's reprojection.
@@ -1597,7 +1676,7 @@ export function createRaymarchRenderer(canvas, options = {}) {
     gl.uniform1f(composite.uniforms.uVignette, frame.vignette ?? 0.34);
     gl.uniform1f(composite.uniforms.uTime, world.time);
     gl.uniform1i(composite.uniforms.uSeed, world.seed | 0);
-    gl.uniform2f(composite.uniforms.uResolution, state.width, state.height);
+    gl.uniform2f(composite.uniforms.uResolution, state.outputWidth, state.outputHeight);
     drawTo(null);
 
     if (query) {

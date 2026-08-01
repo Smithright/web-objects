@@ -652,6 +652,17 @@ function updatePanel(state, stats, totals) {
     ['temporal accumulation', settings.taa ? (stats.accumulated ? 'reprojecting' : 'warming up') : 'off'],
     ['render scale', { text: `${(renderer.stats.renderScale * 100).toFixed(0)}%`, cls: renderer.stats.renderScale > 1 ? 'good' : '' }],
     ['device pixels', `${renderer.pixelRatio.toFixed(2)}× of ${(devicePixelRatio || 1).toFixed(2)}×${renderer.stats.capped ? ' (capped)' : ''}`],
+    // The number that decides whether an edge can look like an edge. Rendered
+    // pixels per physical pixel: below 1 the browser is upscaling, and no
+    // amount of anti-aliasing at render resolution survives that.
+    (() => {
+      const native = renderer.stats.cssWidth * (devicePixelRatio || 1);
+      const fraction = native > 0 ? stats.width / native : 1;
+      return ['of native', {
+        text: `${(fraction * 100).toFixed(0)}%${fraction < 0.999 ? ' — upscaled' : ''}`,
+        cls: fraction >= 0.999 ? 'good' : fraction < 0.7 ? 'warn' : '',
+      }];
+    })(),
     ['resolution', `${stats.width}×${stats.height}`],
     ['adapter', String(renderer.adapter ?? 'unknown').replace(/^ANGLE \(/, '').slice(0, 44)],
   ]);

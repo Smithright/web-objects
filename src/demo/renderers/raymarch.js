@@ -217,7 +217,14 @@ vec3 skyColor(vec3 dir) {
 
   // Aurora, low on the sky, from the same noise as everything else.
   float aurora = smoothstep(0.02, 0.30, dir.y) * (1.0 - smoothstep(0.30, 0.74, dir.y));
-  float curtain = fbm(vec2(atan(dir.z, dir.x) * 2.4 + uTime * 0.035, dir.y * 7.0), uSeed + 401, 4);
+  // Not atan2. It jumps from +pi to -pi across the -X axis, and multiplied by
+  // 2.4 that is a fifteen-unit step in the noise input — a hard vertical seam
+  // down the sky, visible from anywhere the camera can look across that axis.
+  // A planar projection of the direction has no branch cut anywhere the aurora
+  // is drawn, and it stretches the curtain toward the horizon, which is what a
+  // curtain seen edge-on actually does.
+  vec2 curtainUv = dir.xz / (abs(dir.y) + 0.42);
+  float curtain = fbm(vec2(curtainUv.x * 2.2 + uTime * 0.035, curtainUv.y * 2.2 + dir.y * 5.0), uSeed + 401, 4);
   sky += vec3(0.10, 0.44, 0.34) * aurora * pow(curtain, 3.0) * 1.1;
   sky += vec3(0.30, 0.14, 0.40) * aurora * pow(curtain, 6.0) * 0.5;
 
@@ -364,7 +371,21 @@ bool marchTerrain(vec3 ro, vec3 rd, float tMin, float tMax, int steps, out float
     // Step by the clearance to the surface — huge strides across a valley,
     // small ones near the ground — with a floor that grows with distance so a
     // grazing ray still reaches the horizon inside the step budget.
-    t += max(h * 0.5, 0.3 + t * 0.012);
+    //
+    // That floor is what decides how smooth a silhouette is. A ray grazing a
+    // ridge has almost no clearance, so the floor governs, and any ridge
+    // narrower than one step gets stepped clean over: the edge comes out as
+    // a staircase whose treads are the step length. The old floor grew at
+    // 0.012 * t, which is 24 metres at two kilometres — six pixels wide, and
+    // exactly as jagged as that sounds.
+    //
+    // So the floor is one pixel's worth of the world instead of a constant.
+    // uFov is the tangent of the vertical half-angle, so uFov * 2 / height is
+    // the angle a pixel subtends, and t times that is how wide a pixel is out
+    // there. Stepping by that means the staircase treads are always about a
+    // pixel — invisible — and the cost follows the resolution you asked for.
+    float pixelWidth = t * (uFov * 2.0 / uResolution.y);
+    t += max(h * 0.5, 0.3 + pixelWidth * 1.5);
   }
   tHit = tMax;
   return false;
